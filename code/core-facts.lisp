@@ -212,7 +212,7 @@
     :definition (pair symbol json-node))
 
 (defdata-type JSON-alist-node
-    :definition (list json-pair)
+    :definition (list jsonp-air)
     )
 
 (defdata-type JSON-vector-node
@@ -546,6 +546,37 @@
 		(:branches (:name more :condition (not (null the-list)) :outputs ((the-elements (temporal-sequence element-type))
 										  (the-indices (temporal-sequence integers))))
 			   (:name empty :condition (null the-list)))))
+
+;;; An enumerator for the "places in a data structure" (typically a vector, array or list)
+;;; Ultimately, a lot of the other things can be built with this and a follow up operation
+;;; like a Fetch or an Assign
+;;; Also note that this isn't a primitive, it's composed from other things like index-enumerators
+;;; This takes in a set and generates a complete and non-redundant set of "places" within the set
+;;; Parameters: The set type (e.g. (vector number))
+
+(defmethod offset-type-for-set-type ((set-type (eql 'vector)) &optional subtype) 
+  (declare (ignore subtype))
+  'integer)
+
+(defmethod offset-type-for-set-type ((set-type (eql 'array)) &optional subtype)
+  (rest subtype))
+
+(defmethod offset-type-for-set-type ((set-type (eql 'list)) &optional subtype)
+  (declare (ignore subtype))
+  'list)
+
+
+(deftask place-enumerator
+    :primitive nil
+    :super-types (basic-enumerator)
+    :parameters (set-type)
+    :bindings ((set-pure-type (If (symbolp set-type) set-type (first set-type) ))
+	       (set-sub-type (unless (symbolp set-type) (rest set-type)))
+	       (place-type `(place ,set-type ,(offset-type-for-set-type set-pure-type set-sub-type))))
+    :interface ((:inputs (the-set set-type))
+		(:branches (:name more :condition (not (empty the-set)) :outputs ((the-places (temporal-sequence place-type))))
+			   (:name empty :condition (empty the-list)))))
+    
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1004,4 +1035,70 @@
 					     (the-values (temporal-stream value-type))))
 			(:name empty))
 		(:outputs ()))
+    )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Places
+;;;
+;;; A "place' is an abstraction of the notion of a "reference" or a "pointer"
+;;; Often it's useful to think of something generating a sequence of places
+;;; rather than a sequence of values. 
+;;; The values can then be extracted from the place
+;;; Also the places can be assigned to, modifying the contents.
+;;; A typical example is an array-slot or a position in a list
+;;; 
+;;; There are two abstract operations on places: Fetch and Assign
+;;; for arrays, Fetch would refine to aref (in lisp)
+;;;             Assign would refine to (assignf (aref ... ) ...)
+;;;             in other languages these would be left and right-side usages
+;;;
+;;; Places are parameterized by the data type of the values held in the place
+;;; and by the data-type of the containing object
+;;; So unlike C, there are no raw pointers, I guess
+;;; Also this second parameter would be used to guide refinement to a concrete
+;;; operation
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defdata-type place
+    :super-types (data-structure)
+    :parameters (containing-object-type offset-data-type)
+    :bindings ((element-data-type (second containing-object-type)))
+    :parts ((container containing-object-type)
+	    (offset offset-data-type))
+    )
+
+(deftask fetch
+    :primitive t
+    :parameters (containing-object-type offset-data-type)
+    :bindings ((element-data-type (second containing-object-type)))
+    :interface ((:Inputs (the-place (place containing-object-type offset-data-type)))
+		(:Outputs (the-value element-data-type)))
+    )
+
+(deftask assign
+    :primitive t
+    :parameters (containing-object-type offset-data-type)
+    :bindings ((element-data-type (second containing-object-type)))
+    :interface ((:inputs (the-place (place containing-object-type offset-data-type))
+			 (new-value element-data-type))
+		(:outputs)))
+
+(deftask place-constructor
+    :primitive t
+    :parameters (containing-object-type offset-data-type)
+    :interface ((:inputs (container containing-object-type)
+			 (offset offset-data-type))
+		(:outputs (the-place (place containing-object-type offset-data-type))))
+    )
+
+(deftask normalizer
+    :primitive nil
+    :parameters (numeric-type)
+    :bindings ((vector-type `(vector ,numeric-type))
+	       (place-type `(place ,vector-type integer)))
+    :interface ((:inputs (the-places (temporal-sequence place-type))
+			 (normalizer numeric-type))
+		(:outputs ))
     )

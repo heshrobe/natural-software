@@ -715,6 +715,7 @@
 
 (defmethod detemporalize-token ((token t)) (values token nil))
 (defmethod detemporalize-token ((token temporal-sequence-output-value)) (values (input-token token) nil))
+(defmethod detemporalize-token ((token enumerator-symbolic-value-mixin)) (values (enumeration-token token) nil))
 ;;; this may be completely wrong
 (defmethod detemporalize-token ((token stream-output-value)) (values (input-token token) nil))
 (defmethod detemporalize-token ((input-token join-symbolic-value))
@@ -723,6 +724,8 @@
      :value (loop for (join . token) in (value input-token)
 		collect (cons join (detemporalize-token token))))
    t))
+
+
 
 (defmethod propagate ((task task-interface) (type (eql 'take)))
   (let* ((input (first (inputs task)))
@@ -782,6 +785,28 @@
     (set-port-symbolic-token output-port output-token)
     ))
 
+(defmethod propagate ((task task-interface) (type (eql 'place-constructor)))
+  (let* ((container-port (port-named 'input 'container task))
+	 (container-token (symbolic-token container-port))
+	 (container-value (value container-token))
+	 (container-type (type-constraint container-token))
+	 (offset-port (port-named 'input 'offset task))
+	 (offset-token (symbolic-token offset-port))
+	 (offset-value (value offset-token))
+	 (offset-type (type-constraint offset-token))
+	 (output-port (port-named 'output 'the-place task))
+	 (output-token (make-token place-symbolic-value
+			 :value 'place	;??
+			 :port output-port
+			 :producer task
+			 :offset offset-value
+			 :type `(place ,container-type ,offset-type)
+			 :container container-value))
+	 )
+    (set-port-symbolic-token output-port output-token)
+    ))
+
+
 
 ;;; Note: These methods only run on the primitive ENUMERATOR branching task
 ;;; ENUMERATOR is a primitive generator so it should branch just as complex generators do.
@@ -801,6 +826,11 @@
          ;; maybe this should fetch the branch by name?
          (output (first (outputs more-branch)))
          (new-index (next-instance-of-variable 'index))
+	 (enumeration-token (make-token normal-output
+			:Producer more-branch
+			:port output
+			:type 'integer
+			:value new-index))
          (output-value (make-token index-enumerator-symbolic-value
                          :producer more-branch
                          :port output
@@ -808,6 +838,7 @@
                          :lower-bound lower-bound
                          :upper-bound upper-bound
                          :value new-index
+			 :enumeration-token enumeration-token
                          )))
     ;; Doing this will trigger the task-has-completed execution method
     ;; on the branch which will arm the control flows.

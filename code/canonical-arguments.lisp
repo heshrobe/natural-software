@@ -138,3 +138,11 @@
     (multiple-value-setq (output-type) (get-one-property the-accumulator 'output-type))
     (list input-type output-type)
     ))
+
+(defmethod canonical-arguments-for ((type (eql 'place-enumerator) ) the-enumerator)
+  (multiple-value-bind (set-type) (get-one-property the-enumerator 'set-type)
+    (list set-type 'the-set 'the-places)))
+
+(defmethod canonical-arguments-for ((type (eql 'normalizer) ) the-normalizer)
+  (multiple-value-bind (numeric-type) (get-one-property the-normalizer 'numeric-type)
+    (list numeric-type)))

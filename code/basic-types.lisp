@@ -948,8 +948,9 @@
 (defmacro defdata-type (name &rest stuff &key super-types parameters definition 
 					      parts
 					      other-assertions declarations
-					      equivalences union)
-  (declare (ignore parts parameters definition other-assertions declarations equivalences union))
+					      equivalences union 
+					      bindings)
+  (declare (ignore parts parameters definition other-assertions declarations equivalences union bindings))
   ;;(pushnew 'data-structure super-types)
   (remf stuff :super-types)
   (apply #'defstuff-internal name

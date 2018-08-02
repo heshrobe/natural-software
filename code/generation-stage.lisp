@@ -853,6 +853,7 @@
 ;;; in conjunction with a single index enumerator
 ;;; We need to set up the upper-bound and lower-bound in the output-token
 ;;; but we generate no code of our own.
+;;; isn't this also done in the propagation stage?  Does it need to be done twice? 
 (defmethod form-for ((task task-interface) (type (eql 'range-constructor)) (language t))
   (let* ((lower-bound-port (port-named 'input 'lower-bound task))
 	 (lower-bound-token (symbolic-token lower-bound-port))
@@ -867,6 +868,39 @@
 	  (upper-bound output-token) upper-bound-value)
     *defer-token*))
 
+;;; A place constructor used (at the moment)
+;;; to package up a "bounded pointer" i.e. an object and offset
+;;; such as an array and the 
+;;; We need to set up the container and offset in the output-token
+;;; but we generate no code of our own.
+
+(defmethod form-for ((task task-interface) (type (eql 'place-constructor)) (language t))
+  (let* ((container-port (port-named 'input 'container task))
+	 (container-token (symbolic-token container-port))
+	 (container-value (value-to-use container-token language))
+	 (offset-port (port-named 'input 'offset task))
+	 (offset-token (symbolic-token offset-port))
+	 (offset-value (value-to-use offset-token language))
+	 (output-port (port-named 'output 'the-place task))
+	 (output-token (symbolic-token output-port))
+	 )
+    (setf (container output-token) container-value
+	  (offset output-token) offset-value)
+    *defer-token*))
+
+(defmethod generate-opaque-task-code ((task task-interface) (type (eql 'fetch)) (language (eql :lisp)))
+  (let* ((place-port (port-named 'input 'the-place task))
+	 (place-token (symbolic-token place-port)))
+    `(aref ,(container place-token) , (offset place-token))))
+
+(defmethod generate-opaque-task-code ((task task-interface) (type (eql 'assign)) (language (eql :lisp)))
+  (let* ((place-port (port-named 'input 'the-place task))
+	 (place-token (symbolic-token place-port))
+	 (new-value-port (port-named 'input 'new-value task))
+	 (new-value-token (symbolic-token new-value-port)))
+    
+    `(setf (aref ,(container place-token) , (offset place-token))
+       ,(value-to-use new-value-token language))))
 
 ;;; Dead code at the moment
 (defmethod is-a-dead-end ((proxy proxy-task)) (is-a-dead-end (real-task proxy)))

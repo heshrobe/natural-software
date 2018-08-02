@@ -285,7 +285,7 @@
   )
 
 
-(defclass top-level-argument (bound-variable-mixin value-token-mixin)
+(defclass top-level-argument (bound-variable-mixin value-token-mixin) ;
   ()
   )
 
@@ -301,17 +301,23 @@
 ;;; Making bound-variable-mixin come first causes the value-to-use
 ;;; to always use the value rather than the form of this token.
 (defclass enumerator-symbolic-value-mixin (bound-variable-mixin value-token-mixin)
-  ()
-  )
+  ((enumeration-token :initarg :enumeration-token :accessor enumeration-token)
+  ))
 
 (defclass index-enumerator-symbolic-value (enumerator-symbolic-value-mixin)
   ((lower-bound :initarg :lower-bound :accessor lower-bound)
-   (upper-bound :initarg :upper-bound :accessor upper-bound))
+   (upper-bound :initarg :upper-bound :accessor upper-bound)
+   )
   )
 
 (defclass range-symbolic-value (value-token-mixin)
   ((lower-bound :accessor lower-bound :initarg :lower-bound)
    (upper-bound :accessor upper-bound :initarg :upper-bound))
+  )
+
+(defclass place-symbolic-value (value-token-mixin)
+  ((container :accessor container :initarg :container)
+   (offset :accessor offset :initarg :offset))
   )
 
 (defclass list-enumerator-symbolic-value (enumerator-symbolic-value-mixin)
