@@ -81,7 +81,7 @@
     (switch-focus design-editor dip))))
 
 
-(defparameter *trace-refinement* t)
+(defparameter *trace-refinement* nil)
 (defun find-implementations-for (procedure continuation)
   (let* ((task-type (task-type procedure))
 	 (args (canonical-arguments-for task-type procedure))

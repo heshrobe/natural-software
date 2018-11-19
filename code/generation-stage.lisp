@@ -937,6 +937,7 @@
       (build-index-enumerator-code-for-language task language index lower-bound upper-bound more-branch-code empty-branch-code)
     )))
 
+(defparameter *trace-enumerator-gobbling* nil)
 (defmethod gobble-more-and-empty-branch-codes (searching-task language)
   (declare (ignore searching-task))
   (let ((more-branch-code nil)
@@ -945,7 +946,8 @@
 	       (let* ((next-guy (pop *all-tasks*))
 		      (branch-name (when next-guy (name next-guy))))
 		 (case branch-name
-		   (more (setq more-branch-code (let ((*trace-gobble* t)) (sub-gobble (code language next-guy) code))))
+		   (more (setq more-branch-code (let ((*trace-gobble* *trace-enumerator-gobbling*))
+						  (sub-gobble (code language next-guy) code))))
 		   (empty (setq empty-branch-code (sub-gobble (code language next-guy) code)))
 		   (t (error "Where's the other branch")))
 		 )))

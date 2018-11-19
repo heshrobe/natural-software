@@ -520,9 +520,9 @@
 
 (defmethod initialize-design progn ((task up-down-cache-mixin))
   (setf (cached-upstream-tasks task) nil
-	(cached-downstream-tasks) nil
-	(all-upstream-tasks) nil
-	(all-downstream-tasks) nil))
+	(cached-downstream-tasks task) nil
+	(all-upstream-tasks task) nil
+	(all-downstream-tasks task) nil))
 
 (defmethod initialize-design progn ((task simulation-support-mixin))
   (setf (my-code task) nil))
