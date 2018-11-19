@@ -64,11 +64,16 @@
 					    ?original-output-type 
 					    ?input-name 
 					    ?output-name
-					    ?key-type))
+					    ?key-type
+					    ?for-value
+					    ?for-effect))
   :the-instance ?the-enumerator
   :the-plan ?the-plan
   :prerequisites ((not (is-of-type? ?input-type 'temporal-sequence))
-		  (is-of-type? ?output-type 'primitives)
+		  ;;why does the output have to be a primitive?
+		  ;;You could certainly have an array of non-primitive data-structuers
+		  ;; and want to enumeratea a stream of them.
+		  ;;(is-of-type? ?output-type 'primitives)
 		  [can-be-viewed-as ?input-type ?view-type ?viewpoint]
 		  (is-of-type? ?view-type 'sequence)
 		  )
@@ -77,7 +82,7 @@
 		      :parameters ((?viewpoint ?input-type)
 				   ?output-type
 				   ?original-input-type ?original-output-type 
-				   ?input-name ?output-name ?key-type)
+				   ?input-name ?output-name ?key-type ?for-value ?for-effect)
 		      :previous-choices ((viewpoint ?viewpoint) . ?choices-so-far)
 		      :new-choices ?choices
 		      :sub-plan ?the-sub-plan
@@ -136,8 +141,10 @@
 (defreduction vector-to-elements (enumerator (?input-type ?output-type
 							  ?original-input-type ?original-output-type 
 							  ?input-name ?output-name
-							  ?key-type))
-  :reduce-to (enumerate-vector-elements ?input-type ?output-type ?input-name ?output-name ?key-type)
+							  ?key-type
+							  ?for-value 
+							  ?for-effect))
+  :reduce-to (enumerate-vector-elements ?input-type ?output-type ?input-name ?output-name ?key-type ?for-value ?for-effect)
   ;; I'm doing this so that I can use subtypes of vectors (e.g. columns)
   ;; rather than pattern matching on the :then pattern for (vector ?output-type)
   ;; which would only work if it was explictly a vector
@@ -154,8 +161,10 @@
 (defreduction vector-to-elements-2 (enumerator (?input-type ?output-type
 							    ?original-input-type ?original-output-type
 							    ?input-name ?output-name
-							    ?key-type))
-  :reduce-to (double-enumerate ?input-type ?output-type ?intermediate-type ?input-name ?output-name ?key-type)
+							    ?key-type
+							    ?for-value 
+							    ?for-effect))
+  :reduce-to (double-enumerate ?input-type ?output-type ?intermediate-type ?input-name ?output-name ?key-type ?for-value ?for-effect)
   :prerequisites ((is-of-type? ?input-type 'vector)
 		  [property-value-of ?input-type element-type ?intermediate-type]
 		  [not [unify ?intermediate-type ?output-type]]
@@ -164,8 +173,9 @@
 
 ;;; This is for enumerators that generate keys as well as values
 ;;; Nuked generator
-(defreduction vector-to-elements-3 (enumerator-with-keys (?input-type ?output-type ?original-input-type ?original-output-type ?input-name ?output-name ?key-type))
-  :reduce-to (enumerate-vector-elements ?input-type ?output-type ?input-name ?output-name 'the-keys)
+(defreduction vector-to-elements-3 (enumerator-with-keys (?input-type ?output-type ?original-input-type ?original-output-type 
+								      ?input-name ?output-name ?key-type ?for-value ?for-effect))
+  :reduce-to (enumerate-vector-elements ?input-type ?output-type ?input-name ?output-name 'the-keys ?for-value ?for-effect)
   :the-instance ?the-enumerator
   :prerequisites ((is-of-type? ?input-type 'vector)
 		  [property-value-of ?the-enumerator element-type ?sub-type]
@@ -231,73 +241,74 @@
   :control-flows (((:component gen :branch empty) (:component empty)))
   )
 
-;;; Input-type: (vector of something)
-;;; output-type: the something and conditionally the indices
-;;; E.g. (vector integer), number, foo,  bar
-;;; need an allocate and data flows for each
-;;; If the indices-name argument is nil then all the structure for building a temporal sequence  of indices
-;;; is omitted
-(defcliche enumerate-vector-elements (?input-type ?output-type ?input-name ?output-name ?indices-name)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Enumerating the values in an array/vector
+;;; Enumerating the "places" in a array/vector
+;;;
+;;; With for-value = t generates the elements of a vector
+;;; With for-value = nil
+;;; This geneates the places in a array or vector
+;;; rather than the values
+;;; The places can be fetched from or assigned to
+;;;
+;;; This gives a nice compositional account of composing an index geneator
+;;  with a place maker to build a place generator
+;;; and composing that with a place fetch to make a values enumerator
+;;; This is now done by the enumerate-vector-elements cliche with the for-value argument = nil
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;; With ?for-value = t generates the elements of the vector
+;;; With ?for-value = nil generates the places of the vector
+(defcliche enumerate-vector-elements (?input-type ?output-type ?input-name ?output-name ?key-type ?for-value ?finally)
+  :bindings ((?place-type `(place ,?input-type integer))
+	     (?real-output-type (if ?for-value ?output-type ?place-type)))
   :initial-inputs ((:name ?input-name :type ?input-type))
-  :state-elements ((:direction source :name s-1 :port-name old-stream :port-type (temporal-sequence ?output-type) 
+  :state-elements ((:direction source :name s-1 :port-name old-stream :port-type (temporal-sequence ?real-output-type) 
                                :state old-stream :locality :ignore)
-		   (when ?indices-name
-		     (:direction source :name s-2 :port-name old-indices :port-type (temporal-sequence integer) :state old-indices-stream
-				 :locality :ignore))
-		   (when ?indices-name
-		     (:direction source :name s-3 :port-name old-vector :port-type (temporal-sequence ?input-type) :state old-vector-stream
-				 :locality :ignore))
                    )
-  :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?output-type))
-                                    (when ?indices-name (:name ?indices-name :type (temporal-sequence integer)))
-				    (when ?indices-name (:name the-set :type (temporal-sequence ?input-type)))
+  :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?real-output-type))
                                     ))
                 (:name empty)
 		)
   :constants ((:name lower :type integer :value 0))
-  :components ((:name initial-s1 :type allocate :object-type (temporal-sequence ?output-type))
-               (when ?indices-name (:name initial-s2 :type allocate :object-type (temporal-sequence integer)))
-	       (when ?indices-name (:name initial-s3 :type allocate :object-type (temporal-sequence ?input-type)))
+  :components ((:name initial-s1 :type allocate :object-type (temporal-sequence ?real-output-type))
                (:name length :type vector-length :vector-type ?input-type)
                (:name make-range :type range-constructor)
-               (:name enum :type index-enumerator)
+               (:name enum :type index-enumerator :finally-option ?finally)
                (:name t-1 :type Take :element-type integer :input-container-type temporal-sequence)
-               (:name va :type vector-accessor :vector-type ?input-type :element-type ?output-type)
-               (:name p-1 :type put :element-type ?output-type :output-container-type temporal-sequence)
-               (when ?indices-name (:name p-2 :type put :element-type integer :output-container-type temporal-sequence))
-	       (when ?indices-name (:name p-3 :type put :element-type ?input-type :output-container-type temporal-sequence))
+	       (when (not ?for-value) (:name place-maker :type place-constructor :set-type ?input-type :index-type integer))
+               (when ?for-value (:name va :type vector-accessor :vector-type ?input-type :element-type ?real-output-type))
+               (:name p-1 :type put :element-type ?real-output-type :output-container-type temporal-sequence)
                )
   :dataflows (((:component lower :port lower)  (:component make-range :port lower-bound))
               ((:component LENGTH :port LENGTH) (:component make-range :port UPPER-BOUND))
               ((:component ?input-name :port ?input-name) (:component length :port vector))
               ((:component make-range :port the-range) (:component ENUM :port the-set))
               ((:component enum :branch more :port indices) (:component t-1 :port sequence-data))
-              ((:component ?input-name :port ?input-name) (:component va :port vector))
-              ((:component t-1 :port data) (:component va :port index))
-              (when ?indices-name ((:component t-1 :port data) (:component p-2 :port data)))
-	      (when ?indices-name ((:component ?input-name :port ?input-name) (:component p-3 :port data)))
-              ((:component va :port the-element) (:component p-1 :port data))
+              (when ?for-value ((:component ?input-name :port ?input-name) (:component va :port vector)))
+              (when ?for-value ((:component t-1 :port data) (:component va :port index)))
+	      (when ?for-value ((:component va :port the-element) (:component p-1 :port data)))
+	      (when (not ?for-value) ((:component ?input-name :port ?input-name) (:component place-maker :port container)))
+	      (when (not ?for-value) ((:component t-1 :port data) (:component place-maker :port offset)))
+              (when (not ?for-value) ((:component place-maker :port the-place) (:component p-1 :port data)))
               ((:component initial-s1 :port new-object) (:component s-1 :port initial-old-stream))
-              (when ?indices-name ((:component initial-s2 :port new-object) (:component s-2 :port initial-old-indices)))
-	      (when ?indices-name ((:component initial-s3 :port new-object) (:component s-3 :port initial-old-vector)))
               ((:component s-1 :port old-stream) (:component p-1 :port sequence))
-              (when ?indices-name ((:component s-2 :port old-indices) (:component p-2 :port sequence)))
-	      (when ?indices-name ((:component s-3 :port old-vector) (:component p-3 :port sequence)))
               ((:component p-1 :port sequence-data) (:component more :port ?output-name))
-              (when ?indices-name ((:component p-2 :port sequence-data) (:component more :port ?indices-name)))
-	      (when ?indices-name ((:component p-3 :port sequence-data) (:component more :port the-set)))
               )
   :control-flows (((:component enum :branch empty) (:component empty)))
   )
 
-(defcliche double-enumerate (?input-type ?output-type ?intermediate-type ?input-name ?output-name ?key-type)
-  :bindings ()
+(defcliche double-enumerate (?input-type ?output-type ?intermediate-type ?input-name ?output-name ?key-type ?for-value ?for-effect)
+  :bindings ((?real-output-type (if ?for-value output-type `(place ,?intermediate-type ,(index-type ?intermediate-type)))))
   :initial-inputs ((:name ?input-name :type ?input-type))
-  :components ((:name enum-1 :type enumerator :set-type ?input-type :element-type ?intermediate-type)
+  :components ((:name enum-1 :type enumerator :set-type ?input-type :element-type ?intermediate-type :for-value t :finally-option ?for-effect)
                (:name t-1 :type take :element-type ?intermediate-type :input-container-type temporal-sequence)
-               (:name enum-2 :type enumerator :set-type ?intermediate-type :element-type ?output-type :key-type ?key-type)
+               (:name enum-2 :type enumerator :set-type ?intermediate-type :element-type ?output-type :key-type ?key-type :for-value ?for-value :finally-option ?for-effect)
 	       )
-  :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?output-type))
+  :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?real-output-type))
 				    (when ?key-type (:name the-keys :type (temporal-sequence ?key-type)))
 				    (when ?key-type (:name the-set :type (temporal-sequence ?intermediate-type)))))
                 (:name empty)
@@ -582,35 +593,176 @@
   :dataflows (((:component the-container :port the-container) (:component right :port the-container))
 	      ((:component right :port the-part) (:component the-part :port the-part))))
 
-;;; To make this a practical cliche' we need to standardize enough about each of the pieces so that
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Enumerate (filter) Accumulate
+;;;
+;;;
+;;; To make this a practical cliche' we need to standardize the interface to the pieces
 ;;; For the enumerator: We assume it follows an emuerator protocol
 ;;; For the filter: Similarly we assume that it follows a "filter protocol"
 ;;;  ideally the filter could be optional (maybe specified as identity)
 ;;; For the accumulator: Follows an accumulator protocol
 ;;; The passed in types are actually lists of the type together with a parameter list
 ;;; The relevant information is then extracted from these in the bindings.
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defreduction efa-reduce (enumerate-filter-accumulate (?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type))
-  :reduce-to (enumerate-filter-accumulate ?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type)
-					  )
+;;; If there's no filter reduce to enumerate-accumulate
+(defreduction efa-reduce-to-enum-accum (enumerate-filter-accumulate (?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type))
+  :prerequisites ((null ?filter-type))
+  :reduce-to (enumerate-accumulate ?input-type ?enumerator-type ?accumulator-type ?output-type))
 
-(defcliche enumerate-filter-accumulate (?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type)
-  :bindings ((?intermediate-type (getf (rest ?enumerator-type) :element-type)))
+(defun strip-out-properties (plist properties)
+  (loop for (property value) on (rest plist) by #'cddr
+      unless (member property properties)
+      collect property 
+      and collect value))
+
+;;; need functions to produce the values
+(defun process-enum-values (input-type enumerator-type output-type &optional (for-value t) (finally :for-effect))
+  (let* ((enum-is-listp (listp enumerator-type))
+	 (old-enum-properties (when enum-is-listp 
+			  (strip-out-properties enumerator-type '(:set-type :for-value :finally-options))))
+	 (enum-set-type (or (and enum-is-listp (getf (rest enumerator-type) :set-type))  input-type))
+	 (enum-element-type (second enum-set-type))
+	 (enum-name (if enum-is-listp (first enumerator-type) enumerator-type))
+	 (full-enum-type (list* enum-name :set-type enum-set-type :for-value for-value :finally-option finally old-enum-properties))
+	 (enum-output-type (or output-type (second input-type))))
+    (values full-enum-type enum-output-type enum-element-type)))
+
+;;; Fix: Shouldn't numeric type be element-type to be more general?
+(defun process-accum-values (accumulator-type input-type)
+  (let* ((accum-is-listp (listp accumulator-type))
+	 (old-accum-properties (when accum-is-listp (strip-out-properties accumulator-type '(:numeric-type))))
+	 (real-accum-name (if accum-is-listp (first accumulator-type) accumulator-type))
+	 (enum-numeric-type (or (and accum-is-listp (getf (rest accumulator-type) :numeric-type)) (second input-type)))
+	 (real-accum-type (list* real-accum-name :numeric-type enum-numeric-type old-accum-properties)))
+    (values real-accum-type )))
+
+;;; The simple case of an enumerator composed with an accumulator
+(defcliche enumerate-accumulate (?input-type ?enumerator-type ?accumulator-type ?output-type)
+  :bindings (((?full-enum-type ?real-output-type) (process-enum-values ?input-type ?enumerator-type ?output-type t :for-effect))
+	     (?real-accum-type (process-accum-values ?accumulator-type ?input-type))
+	     )
   :initial-inputs ((:name the-set :type ?input-type))
-  :final-outputs ((:name the-accumuland :type ?output-type))
-  :components ((:name enumerator :type ?enumerator-type :recursive-call-name do-it :introduce-labels do-it)
-	       (:name do-one :type take :element-type ?intermediate-type :input-container-type temporal-sequence)
-	       (:name filter :type ?filter-type)
-	       (:name accumulate :type ?accumulator-type :dont-expand nil)
+  :final-outputs ((:name the-accumuland :type ?real-output-type))
+  :components ((:name enumerator :type ?full-enum-type)
+	       (:name accumulate :type ?real-accum-type :dont-expand nil)
 	       )
+  :control-flows (((:component enumerator :branch empty) (:component accumulate :branch empty)))
   :dataflows (
 	      ((:component the-set :port the-set) (:component enumerator :port the-set))
-	      ((:component enumerator :branch more :port the-elements) (:component do-one :port sequence-data))
-	      ((:component do-one :port data) (:component filter :port test-data))
-	      ((:component filter :branch match :port matching-data) (:component accumulate :port the-sequence))
+	      ((:component enumerator :branch more :port the-elements) (:component accumulate :port the-sequence :branch more))
 	      ((:component accumulate :port accumuland) (:component the-accumuland :port the-accumuland)))
   )
-  
+
+;;; Reduction and Cliche for when there is a filter between the enumerator and accumulator
+(defreduction efa-reduce (enumerate-filter-accumulate (?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type))
+  :prerequisites ((not (null ?filter-type)))
+  :reduce-to (enumerate-filter-accumulate ?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type))
+
+;;; Fix: The branch doesn't propagate a value to its output.  But the interface to
+;;; type-split says that the split produces a value on each branch.
+;;; I think that's not actually the right model, branches just split control
+;;; but things in the JDD world assume it does and build data flows.
+
+(defun process-filter-values (filter-type enum-output-type)
+  (let* ((filter-is-listp (listp filter-type))
+	 (old-filter-properties (when filter-is-listp (strip-out-properties filter-type '(:input-type))))
+	 (filter-input-type (or (and filter-is-listp (getf (rest filter-type) :input-type)) enum-output-type))
+	 (filter-name (if filter-is-listp (first filter-type) filter-type))
+	 (real-filter-type (list* filter-name :input-type filter-input-type old-filter-properties)))
+    real-filter-type))	     
+
+(defcliche enumerate-filter-accumulate (?input-type ?enumerator-type ?filter-type ?accumulator-type ?output-type)
+  :bindings (((?full-enum-type ?enum-output-type) (process-enum-values ?input-type ?enumerator-type ?output-type t :for-effect))
+	     (?real-filter-type (process-filter-values ?filter-type ?enum-output-type))
+	     (?real-output-type (or ?output-type ?enum-output-type))
+	     (?real-accum-type (process-accum-values ?accumulator-type ?input-type)))
+  :initial-inputs ((:name THE-SET :type ?input-type))
+  :final-outputs ((:name THE-accumuland :type ?real-output-type))
+  :components (
+               (:name ALLOC :type ALLOCATE :OBJECT-TYPE (TEMPORAL-SEQUENCE ?enum-output-type))
+               (:name ENUM :type ?full-enum-type)
+               (:name DO-ONE :type TAKE :INPUT-CONTAINER-TYPE TEMPORAL-SEQUENCE :ELEMENT-TYPE ?enum-output-type)
+               (:name FILTER :type ?real-filter-type)
+	       (:name RESTREAM :type PUT :OUTPUT-CONTAINER-TYPE TEMPORAL-SEQUENCE :ELEMENT-TYPE ?enum-output-type)
+               (:name ACCUM :type ?real-accum-type)
+               )
+  :dataflows (
+	      ((:component THE-SET :port THE-SET) (:component ENUM :port THE-SET))
+              ((:component ENUM :port THE-ELEMENTS :branch MORE) (:component DO-ONE :port SEQUENCE-DATA))
+              ((:component ALLOC :port NEW-OBJECT) (:component RESTREAM :port SEQUENCE))
+              ((:component DO-ONE :port DATA) (:component FILTER :port TEST-DATA))
+              ((:component DO-ONE :port DATA) (:component RESTREAM :port DATA))
+              ((:component RESTREAM :port SEQUENCE-DATA) (:component ACCUM :port THE-SEQUENCE :branch MORE))
+              ((:component ACCUM :port ACCUMULAND) (:component the-accumuland :port THE-accumuland))
+              )
+  :control-flows (
+                  ((:component ENUM :branch EMPTY) (:component ACCUM :branch EMPTY))
+                  ((:component FILTER :branch MATCH) (:component RESTREAM))
+                  )
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Enumerate and Affect Each
+;;;  Takes a set of elements and a second input
+;;;  Enumerates the elements and then
+;;;  does some operation to each element
+;;;  operates by effect
+;;; but returns the input set as an output
+;;;
+;;; Could have a filter option like enumerate filter accumulate
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+
+(defreduction efae-reduce-to-enum-affect-each (enumerate-filter-affect-each (?input-type ?enumerator-type ?filter-type ?affector-type))
+  :prerequisites ((null ?filter-type))
+  :reduce-to (enumerate-affect-each ?input-type ?enumerator-type ?affector-type))
+
+(defun process-affector-values (affector-type input-type)
+  (let* ((affector-is-listp (listp affector-type))
+	 (old-affector-properties (when affector-is-listp (strip-out-properties affector-type '(:element-type))))
+	 (real-affector-name (if affector-is-listp (first affector-type) affector-type))
+	 (real-affector-type (list* real-affector-name :set-type input-type  old-affector-properties)))
+    (values real-affector-type)))
+
+(defcliche enumerate-affect-each (?input-type ?enumerator-type ?affector-type)
+  :bindings (((?full-enum-type ?real-output-type ?element-type) 
+	      (process-enum-values ?input-type ?enumerator-type ?input-type nil :for-effect))
+	     (?real-affector-type (process-affector-values ?affector-type ?input-type))
+	     )
+  :path-ends ((:name done-more))
+  :initial-inputs ((:name the-set :type ?input-type)
+		   (:name updater-arg :type ?element-type)
+		   )
+  :final-outputs ((:name the-affected-thing :type ?real-output-type))
+  :components ((:name enumerator :type ?full-enum-type)
+	       (:name updater :type ?real-affector-type :dont-expand nil)
+	       )
+  :control-flows (((:component enumerator :branch empty) (:component updater :branch empty))
+		  ((:component enumerator :branch empty) (:component the-affected-thing))
+		  ((:component updater) (:component done-more)))
+  :dataflows (
+	      ((:component the-set :port the-set) (:component enumerator :port the-set))
+	      ((:component the-set :port the-set) (:component the-affected-thing :port the-affected-thing))
+	      ((:component enumerator :branch more :port the-elements) (:component updater :port the-places :branch more))
+	      ((:component updater-arg :port updater-arg) (:component updater :port  updater-arg :branch more))
+	      )
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; The Jason Detect Duplicates Example
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; fix: Make this work again
+
 (defreduction jdd-reduce (jdd ())
   :reduce-to (jdd-plan))
 					    
@@ -630,18 +782,26 @@
 	      ((:component generate-dups :port the-accumuland) (:component print-dups :port the-data)))
   :control-flows (((:component null-test :branch not-empty) (:component print-dups))))
 
-(defreduction array-accum-reduce (array-acc (?input-type ?output-type))
-  :reduce-to (array-acc-plan ?input-type ?output-type))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Accumulating the elements of an array into a set
+;;;  as opposed to numerical reduction
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defreduction set-accum-reduce (set-accumulator (?input-type ?output-type ?op ?initial-value))
+  :reduce-to (set-acc-plan ?input-type ?output-type ?op ?initial-value))
 					    
-(defcliche array-acc-plan (?input-type ?output-type)
-  :initial-inputs ((:name the-set :type (array ?input-type)))
+(defcliche set-acc-plan (?input-type ?output-type ?op ?initial-value)
+  :bindings ((?numeric-type (second ?input-type)))
+  :initial-inputs ((:name the-set :type ?input-type))
   :final-outputs ((:name the-accumuland :type ?output-type))
   :components ((:name generate-it
 		      :type enumerate-filter-accumulate
-		      :input-type (array ?input-type) :output-type ?output-type
-		      :enumerator-type (enumerator :set-type (array ?input-type))
+		      :input-type ?input-type :output-type ?output-type
+	      :enumerator-type (enumerator :set-type ?input-type)
 		      :filter-type identity
-		      :accumulator-type (numeric-accumulator :op add :initial-value 0 :numeric-type ?input-type)))
+		      :accumulator-type (numeric-accumulator :op ?op :initial-value ?initial-value :numeric-type ?numeric-type)))
   :dataflows (((:component the-set :port the-set) (:component generate-it :port the-set))
 	      ((:component generate-it :port the-accumuland) (:component the-accumuland :port the-accumuland))))
 
@@ -694,16 +854,10 @@
   :reduce-to (for-all-cliche))
 
 (defcliche sorted-list-test ()
-  :initial-inputs (
-                   (:name the-list :type (list integer))
-                   )
-  :final-outputs (
-                  (:name the-value :type boolean)
-                  )
-  :constants (
-              (:name true :type boolean :value t)
-              (:name false :type boolean :value nil)
-              )
+  :initial-inputs ((:name the-list :type (list integer)))
+  :final-outputs ((:name the-value :type boolean))
+  :constants ((:name true :type boolean :value t)
+              (:name false :type boolean :value nil))
   :state-elements (
                    (:name last :direction source :port-name last :port-type integer :state last)
                    (:name return-value :direction source :port-name value :port-type boolean :state value)
@@ -794,6 +948,13 @@
                   )
   )
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Numerical Accumulation (also know as reduction) 
+;;; e.g. summing up the elements of a (temporal) sequence
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defreduction accumulator-to-numerically-accumulate (numerical-accumulator (?numeric-type ?op ?initial-value))
   :reduce-to (numerically-accumulate ?numeric-type ?op ?initial-value))
 
@@ -830,171 +991,181 @@
 		  )
   )
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Update Each Element
+;;;              Affect each element of a temporal sequence of places
+;;;              By applying an operation to each element and sticking
+;;;              the result back
+;;;              Normalizing the elements of a set is an example
+;;;
+;;; Parameters are the set-type, numeric-type, and the type of the operation
+;;;   that's applied to each element
+;;;
+;;; This has a two join interface similar to accumulators (more and empty)
+;;; The inputs are to the more join are
+;;;  1) The temporal sequence of places
+;;;  2) The other argument to the operation
+;;;     (at the moment this is limited to a binary operation, but could be generalized
+;;;      through some magic or other)
+;;;
+;;;  This is done for effect, so there is no final output
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defcliche numerically-update (?numeric-type ?op-type ?set-type ?index-type)
-  :entry-points (
-                 (:name empty)
-                 (:name more :ports ((:name normalizer :type ?numeric-type) 
-				     (:name the-sets :type (temporal-sequence (?set-type ?numeric-type))) 
-				     (:name the-indices :type (temporal-sequence ?index-type))
-				     (:name the-values :type (temporal-sequence ?numeric-type)))))
-  :path-ends (
-              (:name done-empty)
-              (:name done :ports ((:name updated-vector :type (?set-type ?numeric-type))))
-              )
-  :components (
-               (:name take-set :type take :element-type (?set-type ?numeric-type) :input-container-type temporal-sequence)
-               (:name take-index :type take :element-type ?index-type :input-container-type temporal-sequence)
-               (:name take-value :type take :element-type ?numeric-type :input-container-type temporal-sequence)
-               (:name normalize :type ?op-type :numeric-type ?numeric-type)
-               (:name updater :type vector-updater :element-type ?numeric-type)
-               )
-  :dataflows (
-              ((:component more :port the-indices) (:component take-index :port sequence-data))
-              ((:component more :port the-values) (:component take-value :port sequence-data))
-              ((:component more :port the-sets) (:component take-set :port sequence-data))
-              ((:component take-value :port data) (:component normalize :port i-1))
-              ((:component more :port normalizer) (:component normalize :port i-2))
-	      ((:component take-set :port data) (:component updater :port vector))
-              ((:component take-index :port data) (:component updater :port index))
-              ((:component normalize :port quotient) (:component updater :port new-data))
-              ((:component updater :port updated-vector) (:component done :port updated-vector))
-              )
-  :control-flows (
-                  ((:component empty) (:component done-empty))
-                  )
+(defreduction reduce-to-update-each (updater (?set-type ?numeric-type ?numeric-op-type))
+  :reduce-to (update-each-element ?set-type ?numeric-type ?numeric-op-type)
   )
 
-
+(defcliche update-each-element (?set-type ?numeric-type ?numerical-op-type)
+  :bindings ((?index-type (index-type ?set-type))
+	     (?place-type `(place ,?set-type ,?index-type))
+	     (?temporal-sequence-type `(temporal-sequence ,?place-type))
+	     (?op-output-port (output-port-for-numeric-op ?numerical-op-type)))
+  :entry-points ((:name empty)
+                 (:name more :ports ((:name updater-arg :type ?numeric-type) 
+				     (:name the-places :type ?temporal-sequence-type))))
+  :final-outputs ()
+  :path-ends ((:name done-more) (:name done-empty))
+  :components (
+               (:name get-one :type take :input-container-type temporal-sequence :element-type ?place-type)
+               (:name get-value :type fetch :containing-object-type ?set-type :index-type ?index-type)
+               (:name normalize :type ?numerical-op-type :numeric-type ?numeric-type)
+               (:name update :type assign :containing-object-type ?set-type :index-type ?index-type)
+               )
+  :dataflows (((:component more :port updater-arg) (:component normalize :port i-2))
+              ((:component more :port the-places) (:component get-one :port sequence-data))
+              ((:component get-one :port data) (:component get-value :port the-place))
+              ((:component get-one :port data) (:component update :port the-place))
+              ((:component get-value :port the-value) (:component normalize :port i-1))
+              ((:component normalize :port ?op-output-port) (:component update :port new-value))
+              )
+  :control-flows (((:component update) (:component done-more))
+		  ((:component empty) (:component done-empty)))
+  )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
-;;; Enumerating the "places" in a array/vector
+;;; Easy to use things that set up test cases
 ;;;
-;;; This geneates the places in a array or vector
-;;; rather than the valuesn
-;;; The places can be fetched from or assigned to so this is the most general cliche
-;;;
-;;; This gives a nice compositional account of composing an index geneator
-;;  with a place maker to build a place generator
-;;; and composing that with a place fetch to make a values enumerator
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defreduction reduce-to-enumerate-vector-places (place-enumerator (?set-type ?input-name ?output-name))
-  :reduce-to (enumerate-vector-places ?set-type ?input-name ?output-name)
-  )
 
-(defcliche enumerate-vector-places (?input-type ?input-name ?output-name)
-  :bindings ((?place-type `(place ,?input-type integer)))
-  :initial-inputs ((:name ?input-name :type ?input-type))
-  :state-elements ((:direction source :name s-1 :port-name old-stream :port-type (temporal-sequence ?place-type) 
-                               :state old-stream :locality :ignore))
-  :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?place-type))
-                                    ))
-                (:name empty)
-		)
-  :constants ((:name lower :type integer :value 0))
-  :components ((:name initial-s1 :type allocate :object-type (temporal-sequence ?place-type))
-               (:name length :type vector-length :vector-type ?input-type)
-               (:name make-range :type range-constructor)
-               (:name enum :type index-enumerator)
-               (:name t-1 :type Take :element-type integer :input-container-type temporal-sequence)
-               (:name place-maker :type place-constructor :containing-object-type ?input-type :offset-data-type integer)
-               (:name p-1 :type put :element-type ?place-type :output-container-type temporal-sequence)
-               )
-  :dataflows (((:component lower :port lower)  (:component make-range :port lower-bound))
-              ((:component LENGTH :port LENGTH) (:component make-range :port UPPER-BOUND))
-              ((:component ?input-name :port ?input-name) (:component length :port vector))
-              ((:component make-range :port the-range) (:component ENUM :port the-set))
-              ((:component enum :branch more :port indices) (:component t-1 :port sequence-data))
-              ((:component ?input-name :port ?input-name) (:component place-maker :port container))
-              ((:component t-1 :port data) (:component place-maker :port offset))
-              ((:component place-maker :port the-place) (:component p-1 :port data))
-              ((:component initial-s1 :port new-object) (:component s-1 :port initial-old-stream))
-              ((:component s-1 :port old-stream) (:component p-1 :port sequence))
-              ((:component p-1 :port sequence-data) (:component more :port ?output-name))
-              )
-  :control-flows (((:component enum :branch empty) (:component empty)))
-  )
-
-(defreduction reduce-to-normalize (normalizer (?numeric-type))
-  :reduce-to (normalize ?numeric-type)
-  )
-
-;;; To Do: Add the step to update the place and the data flows
-;;; Get rid of the built-in assumption that this is an array or at least change it to vector
-(defcliche normalize (?numeric-type)
-  :initial-inputs (
-                   (:name NORMALIZER :type ?NUMERIC-TYPE)
-                   (:name THE-PLACES :type (TEMPORAL-SEQUENCE (PLACE (VECTOR ?NUMERIC-TYPE) INTEGER)))
-                   )
-  :components (
-               (:name UPDATE :type ASSIGN :CONTAINING-OBJECT-TYPE (VECTOR ?NUMERIC-TYPE) :OFFSET-DATA-TYPE INTEGER)
-               (:name GET-ONE :type TAKE :INPUT-CONTAINER-TYPE TEMPORAL-SEQUENCE :ELEMENT-TYPE (PLACE (VECTOR ?NUMERIC-TYPE) INTEGER))
-               (:name GET-VALUE :type FETCH :CONTAINING-OBJECT-TYPE (VECTOR ?NUMERIC-TYPE) :OFFSET-DATA-TYPE INTEGER)
-               (:name NORMALIZE :type DIVIDE :NUMERIC-TYPE ?NUMERIC-TYPE)
-               )
-  :dataflows (
-              ((:component GET-ONE :port DATA) (:component GET-VALUE :port THE-PLACE))
-              ((:component GET-ONE :port DATA) (:component UPDATE :port THE-PLACE))
-              ((:component GET-VALUE :port THE-VALUE) (:component NORMALIZE :port I-1))
-              ((:component NORMALIZE :port QUOTIENT) (:component UPDATE :port NEW-VALUE))
-              ((:component NORMALIZER :port NORMALIZER) (:component NORMALIZE :port I-2))
-              ((:component THE-PLACES :port THE-PLACES) (:component GET-ONE :port SEQUENCE-DATA))
-              )
-  )
-
-
-
-#|
-
-(defcliche values-enumerator ()
-  :initial-inputs (
-                   (:name THE-SET :type (VECTOR NUMBER))
-                   )
-  :final-outputs (
-                  (:name SUM :type NUMBER)
-                  )
-  :state-elements (
-                   (:name SEQUENCE :direction source :port-name SEQUENCE :port-type (TEMPORAL-SEQUENCE NUMBER) :state SEQUENCE :locality :ignore)
-                   )
-  :components (
-               (:name NEW-SEQUENCE :type ALLOCATE :OBJECT-TYPE (TEMPORAL-SEQUENCE NUMBER))
-               (:name PUT :type PUT :OUTPUT-CONTAINER-TYPE TEMPORAL-SEQUENCE :ELEMENT-TYPE NUMBER)
-               (:name FETCH :type FETCH :CONTAINING-OBJECT-TYPE (VECTOR NUMBER) :OFFSET-DATA-TYPE INTEGER)
-               (:name ACC :type NUMERICAL-ACCUMULATOR :NUMERIC-TYPE NUMBER :OP ADD :INITIAL-VALUE 0)
-               (:name T-1 :type TAKE :INPUT-CONTAINER-TYPE TEMPORAL-SEQUENCE :ELEMENT-TYPE (PLACE (VECTOR NUMBER) INTEGER))
-               (:name P-E-2 :type PLACE-ENUMERATOR :ELEMENT-TYPE NUMBER :SET-TYPE (VECTOR NUMBER))
-               )
-  :dataflows (
-              ((:component NEW-SEQUENCE :port NEW-OBJECT) (:component SEQUENCE :port INITIAL-SEQUENCE))
-              ((:component SEQUENCE :port SEQUENCE) (:component PUT :port SEQUENCE))
-              ((:component THE-SET :port THE-SET) (:component P-E-2 :port THE-SET))
-              ((:component PUT :port SEQUENCE-DATA) (:component ACC :port THE-SEQUENCE :branch MORE))
-              ((:component FETCH :port THE-VALUE) (:component PUT :port DATA))
-              ((:component ACC :port ACCUMULAND) (:component SUM :port SUM))
-              ((:component T-1 :port DATA) (:component FETCH :port THE-PLACE))
-              ((:component P-E-2 :port THE-PLACES :branch MORE) (:component T-1 :port SEQUENCE-DATA))
-              )
-  :control-flows (
-                  ((:component P-E-2 :branch EMPTY) (:component ACC :branch EMPTY))
-                  )
-  )
-
-|#
-
+  
+;;; This is operate on each element
 (defcliche test ()
   :initial-inputs (
                    (:name NORMALIZER :type number)
-                   (:name THE-SET :type (vector number))
+                   (:name THE-SET :type (array number 2))
                    )
   :components (
-               (:name NORMALIZE :type NORMALIZER :NUMERIC-TYPE NUMBER)
-               (:name ENUM :type PLACE-ENUMERATOR :ELEMENT-TYPE NUMBER :SET-TYPE (VECTOR NUMBER) :INPUT-NAME THE-SET :OUTPUT-NAME THE-PLACES)
+               (:name NORMALIZE :type NORMALIZER :set-TYPE (array number 2))
+               (:name ENUM :type ENUMERATOR :ELEMENT-TYPE NUMBER :SET-TYPE (array NUMBER 2) :INPUT-NAME THE-SET :OUTPUT-NAME THE-PLACES
+		      :for-value nil)
                )
   :dataflows (
-              ((:component ENUM :port THE-PLACES :branch MORE) (:component NORMALIZE :port THE-PLACES))
+              ((:component ENUM :port THE-elements :branch MORE) (:component NORMALIZE :port THE-PLACES))
               ((:component NORMALIZER :port NORMALIZER) (:component NORMALIZE :port NORMALIZER))
               ((:component THE-SET :port THE-SET) (:component ENUM :port THE-SET))
               )
   )
+
+;;; This is a generate accumulate
+(defcliche test-2 ()
+  :initial-inputs (
+                   (:name THE-ARRAY :type (ARRAY INTEGER 2))
+                   )
+  :final-outputs (
+                  (:name THE-SUM :type INTEGER)
+                  )
+  :components (
+               (:name ACC :type NUMERICAL-ACCUMULATOR :INITIAL-VALUE 0 :OP ADD :NUMERIC-TYPE INTEGER)
+               (:name ENUM :type ENUMERATOR :OUTPUT-TYPE INTEGER :ELEMENT-TYPE INTEGER :SET-TYPE (ARRAY INTEGER 2) :FOR-VALUE T)
+               )
+  :dataflows (
+              ((:component ACC :port ACCUMULAND) (:component THE-SUM :port THE-SUM))
+              ((:component ENUM :port THE-ELEMENTS :branch MORE) (:component ACC :port THE-SEQUENCE :branch MORE))
+              ((:component THE-ARRAY :port THE-ARRAY) (:component ENUM :port THE-SET))
+              )
+  :control-flows (
+                  ((:component ENUM :branch EMPTY) (:component ACC :branch EMPTY))
+                  )
+  )
+
+(defun test-ea ()
+  (enumerate-accumulate (dip)
+			'(array integer 2)
+			'enumerator
+			'(numerical-accumulator :op add)
+			'integer))
+
+(defun test-ea-component ()
+  (add-component *design-editor* 'test-ea 'enumerate-filter-accumulate
+		 '((input-type (array integer 2))
+		   (enumerator-type enumerator)
+		   (accumulator-type (numerical-accumulator :op add))
+		   (output-type integer)
+		   )))
+
+(defun test-efa ()
+  (enumerate-filter-accumulate (dip)
+			       '(array integer 2)
+			       'enumerator
+			       `(type-split :condition plusp)
+			       '(numerical-accumulator :op add)
+			       'integer))
+
+(defun test-efa-component ()
+  (add-component *design-editor* 'test-ea 'enumerate-filter-accumulate
+		 '((input-type (array integer 2))
+		   (enumerator-type enumerator)
+		   (filter-type (type-split :condition plusp))
+		   (accumulator-type (numerical-accumulator :op add))
+		   (output-type integer)
+		   )))
+
+(defun test-enumerate-affect-each ()
+  (enumerate-affect-each (dip)
+	       '(array integer 2)
+	       'enumerator
+	       '(updater :op-type divide)))
+
+;;; To do
+(defun test-enumerate-affect-each-component ()
+  (add-component *design-editor* 'test-eae 'enumerate-filter-affect-each
+		 '((input-type (array integer 2))
+		   (enumerator-type enumerator)
+		   (filter-type nil)
+		   (affector-type (updater :op-type divide))		   
+		   ))
+  )
+
+(defcliche test-normalize-array ()
+  :initial-inputs ((:name the-set :type (array integer 2)))
+  :final-outputs ((:name the-affected-set :type (array integer 2)))
+  :components ((:name test-ea :type enumerate-filter-accumulate 
+		      :input-type (array integer 2) 
+		      :output-type integer
+		      :enumerator-type enumerator 
+		      :accumulator-type (numerical-accumulator :op add))
+               (:name test-eae :type enumerate-filter-affect-each :input-type (array integer 2) 
+		      :enumerator-type enumerator :filter-type nil :affector-type (updater :op-type divide)))
+  :dataflows (
+              ((:component the-set :port the-set) (:component test-ea :port the-set))
+              ((:component the-set :port the-set) (:component test-eae :port the-set))
+              ((:component test-ea :port the-accumuland) (:component test-eae :port updater-arg))
+              ((:component test-eae :port the-affected-thing) (:component the-affected-set :port the-affected-set))
+              )
+  )
+
+
+
+
+;;; To Do: Create a clich for enumerate-affect-each similar to enumerate-accumulate
+;;; get rid of all the confused things in here to create this
+;;; look for anything that has an argument called "inices" it's probably a bogus 
+;;; attempt to deal with the lack of "places".
+;;; Fix up all the stuff associated with the JDD example which enumerates trees
+;;; not vectors.
+;;; Test whether the previous thing works if the input type is a vector vs an array (it should)
+

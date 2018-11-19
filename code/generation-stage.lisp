@@ -188,6 +188,7 @@
 	   ((not (eql simplified-form form))
 	    (when (listp form)
 	      (setq simplified-form (concretize-for-langauge simplified-form (first simplified-form) language)))
+	    ;; Fix? Is there a side-effect on shared data issue here?
 	    (setf (form output-token) simplified-form
 		  (value output-token) simplified-form)
 	    (cond
@@ -669,7 +670,7 @@
 ;;; If it were, it would wrap the base case (i.e. (task-type t) (language t))
 ;;; which is the opposite of what was desired.  Here's it's just a normal method
 ;;; but the call-next-method in the second clause of the COND has the effect of 
-;;; doing the normal case for vanilla application forms if we're not in the special case of array accessing
+\;;; doing the normal case for vanilla application forms if we're not in the special case of array accessing
 ;;; vs Vector (i.e. object-oriented) accessing. 
 ;;; We still need the same kind of special casing for array assignment.
 (defmethod generate-opaque-task-code ((task task-interface) (task-type (eql 'vector-accessor)) (language (eql :lisp)))
@@ -870,7 +871,7 @@
 
 ;;; A place constructor used (at the moment)
 ;;; to package up a "bounded pointer" i.e. an object and offset
-;;; such as an array and the 
+;;; such as a vector and its index 
 ;;; We need to set up the container and offset in the output-token
 ;;; but we generate no code of our own.
 
@@ -888,18 +889,24 @@
 	  (offset output-token) offset-value)
     *defer-token*))
 
+;;; Fix add equivalent methods for java generation
 (defmethod generate-opaque-task-code ((task task-interface) (type (eql 'fetch)) (language (eql :lisp)))
   (let* ((place-port (port-named 'input 'the-place task))
 	 (place-token (symbolic-token place-port)))
-    `(aref ,(container place-token) , (offset place-token))))
+    (simplified-form `(element ,(container place-token) , (offset place-token)))))
+
+(defmethod generate-opaque-task-code ((task task-interface) (type (eql 'fetch-object)) (language (eql :lisp)))
+  (let* ((place-port (port-named 'input 'the-place task))
+	 (place-token (symbolic-token place-port)))
+    (simplified-form (container place-token))))
 
 (defmethod generate-opaque-task-code ((task task-interface) (type (eql 'assign)) (language (eql :lisp)))
   (let* ((place-port (port-named 'input 'the-place task))
 	 (place-token (symbolic-token place-port))
 	 (new-value-port (port-named 'input 'new-value task))
-	 (new-value-token (symbolic-token new-value-port)))
-    
-    `(setf (aref ,(container place-token) , (offset place-token))
+	 (new-value-token (symbolic-token new-value-port))
+	 (accessor-form `(element ,(container place-token) ,(offset place-token))))
+    `(setf ,(simplified-form accessor-form)
        ,(value-to-use new-value-token language))))
 
 ;;; Dead code at the moment
@@ -927,7 +934,7 @@
     ;; so if we start gobbling we'll get the branch code
     (setf (form more-output-port-token) index)
     (multiple-value-bind (more-branch-code empty-branch-code) (gobble-more-and-empty-branch-codes task language)
-      (build-index-enerator-code-for-language task language index lower-bound upper-bound more-branch-code empty-branch-code)
+      (build-index-enumerator-code-for-language task language index lower-bound upper-bound more-branch-code empty-branch-code)
     )))
 
 (defmethod gobble-more-and-empty-branch-codes (searching-task language)
@@ -938,7 +945,7 @@
 	       (let* ((next-guy (pop *all-tasks*))
 		      (branch-name (when next-guy (name next-guy))))
 		 (case branch-name
-		   (more (setq more-branch-code (sub-gobble (code language next-guy) code)))
+		   (more (setq more-branch-code (let ((*trace-gobble* t)) (sub-gobble (code language next-guy) code))))
 		   (empty (setq empty-branch-code (sub-gobble (code language next-guy) code)))
 		   (t (error "Where's the other branch")))
 		 )))
@@ -946,7 +953,7 @@
       (gobble-branch))
     (values more-branch-code empty-branch-code)))
 
-(defmethod build-index-enerator-code-for-language ((task primitive-enumerator) (language (eql :lisp)) 
+(defmethod build-index-enumerator-code-for-language ((task primitive-enumerator) (language (eql :lisp)) 
 						   index lower-bound upper-bound more-branch-code empty-branch-code)
   (let ((how-to-handle-finally (getf (properties task) :finally-option)))
     `(loop for ,index from ,lower-bound below ,upper-bound
@@ -955,11 +962,11 @@
 		(case how-to-handle-finally
 		  (:empty ())
 		  (:return `(finally (return ,@empty-branch-code)))
-		  (:effect empty-branch-code))
+		  (:for-effect `(finally ,@empty-branch-code)))
 		))))
 
 ;;; (loop-variable &key init refresh terminate body)
-(defmethod build-index-enerator-code-for-language ((task primitive-enumerator) (language (eql :java)) 
+(defmethod build-index-enumerator-code-for-language ((task primitive-enumerator) (language (eql :java)) 
 						   index lower-bound upper-bound more-branch-code empty-branch-code)
   ;; This is to prevent a newline being printed
   (let ((how-to-handle-finally (getf (properties task) :finally-option)))

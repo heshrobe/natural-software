@@ -686,9 +686,33 @@
 
 (eval-when (:compile-toplevel :load-toplevel)
 
+  ;; Changed this to allow binding a bunch of things at once
+  ;; if the first thing is a list then bind those variables to NIL
+  ;; and collect a set of multiple-value-setq forms to be added after the
+  ;; let.  
+  ;; If the first thing is just a logic variable then bind to NIL
+  ;; and add a setq form to be added after the let
+  ;; Returns 2 values, the bindings and the multiple-value-setq/setq forms
   (defun process-bindings (binding-set)
-    (loop for (name form) in binding-set
-	collect (list (devariablize name 'normal) (devariablize form 'raw)))
+    (let ((let-forms nil)
+	  (mvs-forms nil))
+      (loop for (name form) in binding-set do 
+	     (cond
+	      ((logic-variable-maker-p name)
+	       (push (list (devariablize name 'normal)) let-forms)
+	       ;; we have to do this so that the assignment order is correct
+	       (push `(setq ,(devariablize name 'normal) ,(devariablize form 'raw))
+		     mvs-forms))
+	      ((listp name)
+	       (loop for var in name
+		   do 
+		      (push (list (devariablize var 'normal)) let-forms))
+	       (push `(multiple-value-setq
+			  ,(loop for var in name collect (devariablize var 'normal))
+			,(devariablize form 'raw))
+		     mvs-forms))
+	      (t (break "huh"))))
+      (values (nreverse let-forms) (nreverse mvs-forms)))
     )
 
   (defun process-initial-input-description (form parent-name)
@@ -836,37 +860,39 @@
 					   constants
 					   )
     (let ((parent-name (gensym)))
-      `(eval-when (:load-toplevel :execute :compile-toplevel)
-	 (defun ,plan-name (,parent-name ,@(mapcar #'devariablize args))
-	   (declare (ignorable ,@(mapcar #'devariablize args)))
-	   (declare ,@declarations)
-	   (let* ,(process-bindings bindings)
-	      ,@(loop for input in initial-inputs collect 
-		      (do-wrapper (process-initial-input-description input parent-name)))
-	      ,@(loop for output in final-outputs collect
-		      (do-wrapper (process-final-output-description output parent-name)))
-	      ,@ (loop for end in path-ends collect
-		       (do-wrapper (process-path-end-description end parent-name)))
-	      ,@(loop for entry-point in entry-points collect
-		      (do-wrapper (process-entry-point-description entry-point parent-name)))
-	      ,@(loop for exit-point in exit-points collect
-		      (do-wrapper (process-exit-point-description exit-point parent-name)))
-	      ,@ (loop for constant in constants collect
-		       (do-wrapper (process-constant-description constant parent-name)))
-	      ,@(loop for state-element in state-elements collect
-		      (do-wrapper (process-state-element-description state-element parent-name)))
-	      ,@(loop for component in components collect
-		      (do-wrapper (process-component-description component parent-name)))
-	      ,@(loop for dataflow in dataflows collect
-		      (do-wrapper (process-dataflow-description dataflow parent-name)))
-	      ,@(loop for cflow in control-flows collect 
-		      (do-wrapper (process-control-flow-description cflow parent-name)))
-	      ))	 
-	 ,@(loop for contact-point in contact-points collect (process-contact-point-description plan-name contact-point))
-	 (tell `[initializer-for-merge ,',plan-name ,',initializer])
-	 )
-      ))
-  )
+      (multiple-value-bind (let-forms mvs-forms) (process-bindings bindings)
+	`(eval-when (:load-toplevel :execute :compile-toplevel)
+	   (defun ,plan-name (,parent-name ,@(mapcar #'devariablize args))
+	     (declare (ignorable ,@(mapcar #'devariablize args)))
+	     (declare ,@declarations)
+	     (let* ,let-forms
+	       ,@mvs-forms
+	       ,@(loop for input in initial-inputs collect 
+		       (do-wrapper (process-initial-input-description input parent-name)))
+	       ,@(loop for output in final-outputs collect
+		       (do-wrapper (process-final-output-description output parent-name)))
+	       ,@ (loop for end in path-ends collect
+			(do-wrapper (process-path-end-description end parent-name)))
+	       ,@(loop for entry-point in entry-points collect
+		       (do-wrapper (process-entry-point-description entry-point parent-name)))
+	       ,@(loop for exit-point in exit-points collect
+		       (do-wrapper (process-exit-point-description exit-point parent-name)))
+	       ,@ (loop for constant in constants collect
+			(do-wrapper (process-constant-description constant parent-name)))
+	       ,@(loop for state-element in state-elements collect
+		       (do-wrapper (process-state-element-description state-element parent-name)))
+	       ,@(loop for component in components collect
+		       (do-wrapper (process-component-description component parent-name)))
+	       ,@(loop for dataflow in dataflows collect
+		       (do-wrapper (process-dataflow-description dataflow parent-name)))
+	       ,@(loop for cflow in control-flows collect 
+		       (do-wrapper (process-control-flow-description cflow parent-name)))
+	       ))	 
+	   ,@(loop for contact-point in contact-points collect (process-contact-point-description plan-name contact-point))
+	   (tell `[initializer-for-merge ,',plan-name ,',initializer])
+	   )
+	)))
+    )
 
 (defun sub-types (type)
   (let ((answer nil))

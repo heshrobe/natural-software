@@ -74,15 +74,18 @@
   (multiple-value-bind (canonical-input-type input-type) (get-one-property the-enumerator 'set-type)
     (multiple-value-bind (canonical-output-type output-type) (get-one-property the-enumerator 'element-type)
       (multiple-value-bind (canonical-key-type key-type) (get-one-property the-enumerator 'key-type)
-	(declare (ignore key-type))
-	(List canonical-input-type 
-	      canonical-output-type
-	      input-type		;before canonicalization
-	      output-type		;ditto
-	      (name (first (inputs the-enumerator))) ;input-name
-	      (name (first (outputs (branch-named 'more the-enumerator)))) ;output-name
-	      canonical-key-type
-	      )))))
+	(multiple-value-bind (canonical-for-value for-value) (get-one-property the-enumerator 'for-value)
+	  (declare (ignore key-type for-value))
+	  (List canonical-input-type 
+		canonical-output-type
+		input-type		;before canonicalization
+		output-type		;ditto
+		(name (first (inputs the-enumerator))) ;input-name
+		(name (first (outputs (branch-named 'more the-enumerator)))) ;output-name
+		canonical-key-type
+		canonical-for-value
+		(get-one-property the-enumerator 'finally-option)
+		))))))
 
 (defmethod canonical-arguments-for ((type (eql 'enumerator-with-keys)) the-enumerator)
   (multiple-value-bind (canonical-input-type input-type) (get-one-property the-enumerator 'set-type)
@@ -108,17 +111,34 @@
       (list input-type output-type)
       )))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Enumerate-filter-accumulate and Enumerate-filter-affect-each
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defmethod canonical-arguments-for ((type (eql 'enumerate-filter-accumulate)) the-e-f-a)
-  (let (input-type output-type enumerator-type filter-type accumulator-type)
-      (multiple-value-setq (input-type) (get-one-property the-e-f-a 'input-type))
-      (multiple-value-setq (output-type) (get-one-property the-e-f-a 'output-type))
-      (multiple-value-setq (enumerator-type) (get-one-property the-e-f-a 'enumerator-type))
-      (multiple-value-setq (filter-type) (get-one-property the-e-f-a 'filter-type))
-      (multiple-value-setq (accumulator-type) (get-one-property the-e-f-a 'accumulator-type))
-      (list input-type enumerator-type filter-type accumulator-type output-type)
-      ))
+  (loop for property-name in '(input-type enumerator-type filter-type accumulator-type output-type)
+      collect (get-one-property the-e-f-a property-name)))
 
-;;; This is the demo
+(defmethod canonical-arguments-for ((type (eql 'numerical-accumulator)) the-accumulator)
+  (loop for property-name in '(numeric-type op initial-value)
+      collect (get-one-property the-accumulator property-name)))
+
+
+(defmethod canonical-arguments-for ((type (eql 'enumerate-filter-affect-each)) the-e-f-a)
+  (loop for property-name in '(input-type enumerator-type filter-type affector-type)
+      collect (get-one-property the-e-f-a property-name)))
+
+(defmethod canonical-arguments-for ((type (eql 'updater) ) the-normalizer)
+  (loop for property-name in '(set-type element-type op-type)
+      collect (get-one-property the-normalizer property-name)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; This is for the jdd demo
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
 (defmethod canonical-arguments-for ((type (eql 'jdd)) the-dup-detector)
   (declare (ignore the-dup-detector))
@@ -128,9 +148,6 @@
   (declare (ignore the-thing))
   nil)
 
-(defmethod canonical-arguments-for ((type (eql 'numerical-accumulator)) the-accumulator)
-  (loop for property-name in '(numeric-type op initial-value)
-      collect (get-one-property the-accumulator property-name)))
 
 (defmethod canonical-arguments-for ((type (eql 'array-acc)) the-accumulator)
   (let (input-type output-type)
@@ -139,10 +156,11 @@
     (list input-type output-type)
     ))
 
-(defmethod canonical-arguments-for ((type (eql 'place-enumerator) ) the-enumerator)
-  (multiple-value-bind (set-type) (get-one-property the-enumerator 'set-type)
-    (list set-type 'the-set 'the-places)))
-
-(defmethod canonical-arguments-for ((type (eql 'normalizer) ) the-normalizer)
-  (multiple-value-bind (numeric-type) (get-one-property the-normalizer 'numeric-type)
-    (list numeric-type)))
+(defmethod canonical-arguments-for ((type (eql 'set-accumulator)) the-accumulator)
+  (let (input-type output-type op initial-value)
+    (multiple-value-setq (input-type) (get-one-property the-accumulator 'input-type))
+    (multiple-value-setq (output-type) (get-one-property the-accumulator 'output-type))
+    (multiple-value-setq (op) (get-one-property the-accumulator 'op))
+    (multiple-value-setq (initial-value) (get-one-property the-accumulator 'initial-value))
+    (list input-type output-type op initial-value)
+    ))

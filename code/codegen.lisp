@@ -376,6 +376,7 @@
     (propagation-stage top-level-task initial-tasks output streaming?)
     (destructuring-bind (caller . *all-tasks*) (topological-sort-sub-tasks top-level-task)
       (declare (special *all-tasks*))
+      ;; (print *all-tasks* *trace-output*)
       (let ((the-code (gobble-code language caller)))
         (code-for-top-level-task top-level-task top-level-arguments  
                                  the-code language
@@ -424,7 +425,7 @@
 ;;; until you hit one that doesn't have you as a member
 ;;; of it's all-upstream-tasks list.
 ;;; Caller has already been popped from *all-tasks*
-
+(defvar *trace-gobble* nil)
 (defun gobble-code (language &optional caller)
   (loop until (null *all-tasks*)
       while (member caller (all-upstream-tasks (first *all-tasks*)))
@@ -432,7 +433,11 @@
       for next-form = (form-for next-task (task-type next-task) language)
       unless (eql next-form *defer-token*)
       collect next-form into forms
-      finally 
+      when *trace-gobble*
+	   do (format *error-output* "~%Gobbling ~a for ~a" next-task caller)
+      finally (when *trace-gobble* 
+		(format *error-output* "~%~a stopped gobbling for ~a *all-tasks* ~a" 
+			(first *all-tasks*) caller *all-tasks*))
               (return forms))
         )
 
@@ -505,10 +510,19 @@
 ;;;
 ;;; Cleaning up a design so you can regenerate code
 ;;;
+;;; Fix: There is a lot more cached data now
+;;;   cached-upstream-tasks all-upstream-tasks
+;;;   make sure these get cleared
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defgeneric initialize-design (task)
   (:method-combination progn))
+
+(defmethod initialize-design progn ((task up-down-cache-mixin))
+  (setf (cached-upstream-tasks task) nil
+	(cached-downstream-tasks) nil
+	(all-upstream-tasks) nil
+	(all-downstream-tasks) nil))
 
 (defmethod initialize-design progn ((task simulation-support-mixin))
   (setf (my-code task) nil))
@@ -596,7 +610,7 @@
     (loop for target in targets
 	do (funcall action target))))
 
-(defun test (top-level task-type)
+(defun test-add-a-port (top-level task-type)
   (flet ((add-a-port (target)
 	   (remove-port 'input 'path-so-far target)
 	   (let ((port (add-port 'input 'path-so-far target)))

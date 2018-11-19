@@ -458,25 +458,45 @@
     :union (primitives tuple)
     )
 
+(defgeneric index-type (thing-type))
+(defmethod index-type ((thing cons)) (compound-index-type (first thing) (rest thing)))
+
+(defgeneric compound-index-type (keyword args)) 
+
+(defmethod compound-index-type ((thing (eql 'vector)) args) 
+  (declare (ignore args))
+  'integer)
+
+(defmethod compound-index-type ((thing (eql 'array)) args) 
+  (destructuring-bind (element-type number-of-dimensions) args
+    (declare (ignore element-type))
+    (loop repeat number-of-dimensions collect 'integer)))
+
 (deftask basic-enumerator
     :primitive t
     :super-types (procedure)
+    :parameters (set-type element-type collection-type (for-value t) output-type (Finally-option :for-effect) index-type)
     :bindings ((set-type (cond ((and set-type element-type) set-type)
 			       ((and collection-type element-type) (list collection-type element-type))
 			       (t set-type)))
-	       (element-type (or element-type (second set-type))))
-    :parameters (set-type element-type collection-type)
+	       (element-type (or element-type (second set-type)))
+	       (index-type (index-type set-type))
+	       (output-type (if for-value element-type `(place ,set-type ,index-type)))
+	       )
     :interface ((:inputs (the-set set-type))
-		(:branches (:name more :condition (not (empty the-set)) :outputs ((the-elements (temporal-sequence element-type))))
+		(:branches (:name more :condition (not (empty the-set)) :outputs ((the-elements (temporal-sequence output-type))))
 			   (:name empty :condition (empty the-set)))))
 
+;;; Can the key-type be eliminated through use of places
+;;; or was that for the json demo?
 (deftask enumerator
     :parameters (key-type)
     :super-types (basic-enumerator)
-    :interface ((:branches (:name more :condition (not (empty the-set)) :outputs ((the-elements (temporal-sequence element-type))
-										  (when key-type (the-keys (temporal-sequence key-type)))
-										  (when key-type (the-set (temporal-sequence set-type)))
-										  ))))
+    :interface ((:branches (:name more :condition (not (empty the-set)) 
+			    :outputs ((the-elements (temporal-sequence output-type))
+				      (when key-type (the-keys (temporal-sequence key-type)))
+				      (when key-type (the-set (temporal-sequence set-type)))
+				      ))))
     )
 
 ;; an enumerator that generates both keys and values
@@ -520,10 +540,11 @@
 		(:outputs (the-range (range integer)))
 		))
     
-
+;;; Fix?: Maybe range is compound?
+(defmethod index-type ((thing (eql 'range))) 'integer)
 (deftask index-enumerator
     :primitive t
-    :parameters ((set-type range) (element-type integer))
+    :parameters ((set-type range) (element-type integer) (for-value t) )
     :super-types (basic-enumerator)
     :interface ((:branches (:name more :condition (inbounds index) :outputs ((indices (temporal-sequence integer))))
 			   (:name empty :condition (not (inbounds index)))))
@@ -765,47 +786,6 @@
 		(:outputs (the-output (temporal-sequence real-output-type))))
     )
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;
-;;;  Accumulators
-;;;
-;;; there are variations on this theme.  For example
-;;; does it take a manifested set (i.e. a data structure) as input
-;;; or a temporal sequence
-;;; Does it do extraction of the elements of the set, etc.
-;;; Given this I just have two at the moment:
-;;; 1) a simple numerical one that takes a temporal sequence of numbers (should extend with extractor)
-;;; and reduces the number with some numerical op and initial value
-;;; 2) A set accumulator that takes a data structure does extraction and produces a new set
-;;; to do: make a basic accumulator and then sub-types that are set-accumulator and numerical-accumulator
-;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(deftask numerical-accumulator
-    :super-types (procedure)
-    :primitive nil
-    :parameters (numeric-type op initial-value)
-    :bindings ((real-input-type (if (eql op 'count) 'data-structure numeric-type))
-	       (real-output-type (if (eql op 'count) 'integer numeric-type)))
-    :interface ((:joins (:name more :inputs ((the-sequence (temporal-sequence real-input-type))))
-			(:name empty))
-		(:outputs (accumuland real-output-type))))
-
-;;; This guy takes a manifested set (i.e. not a temporal sequence)
-;;; and accumulates an output value
-(deftask set-accumulator
-    :super-types (procedure)
-    :primitive nil
-    :parameters (input-type output-type key-extractor-type)
-    :bindings ((real-input-type (or (definition-for input-type) input-type))
-	       (input-sequence-type (first real-input-type))
-	       (element-type (second real-input-type))
-	       (real-output-type (or (definition-for output-type) output-type))
-	       (output-set-type (first real-output-type))
-	       (key-type (second real-output-type)))
-    :interface ((:inputs (the-sequence input-type))
-		(:outputs (accumuland output-type))))
-
 (deftask detect-duplicates
     :primitive nil
     :super-types (set-accumulator)
@@ -822,12 +802,26 @@
     :super-types (filter)
     :primitive t
     :parameters ((non-matching-output-type input-type))
-    :bindings ((actual-condition (or condition `(typep test-data ',output-type)))
+    :bindings ((actual-condition 
+		(cond 
+		 ((and condition (symbolp condition))
+		  (list condition 'test-data))
+		 ((not (null condition)) condition)
+		 (t `(typep test-data ',output-type))))
 	       (actual-output-type (or output-type (third actual-condition))))				 
     :interface ((:branches (:name match :condition actual-condition :outputs ((matching-data actual-output-type)))
 			   (:name no-match :condition (not actual-condition) :outputs ((non-matching-data non-matching-output-type)))
 			   ))
     )
+
+;;; Fix: these need to be made to match the interface of filter
+(deftask empty-test
+    :primitive t
+    :parameters (element-type)
+    :interface ((:inputs (the-list (list element-type)))
+		(:branches (:name not-empty :condition (not (null the-list)))
+			   (:name empty :condition (null the-list)))))
+
 
 (deftask enumerate-filter-accumulate
     :super-types (procedure)
@@ -843,48 +837,53 @@
 ;;; These are for when you enumerate a sequence and then affect each element
 ;;; with the result of a computation
 ;;;
-;;; The enumerator is assumed to be producing three matching temporal sequences
-;;; The element to be updated (e.g. a vector, some sort of tree node)
-;;; The index of that element (e.g. a number, a slot-name)
-;;; Together these consitute a place (and maybe that would be the right abstraction)
-;;; The current-value in that place
+;;; The enumerator is assumed to be producing a temporal sequence of places in some set
+;;; 
+;;; Parameters:
+;;;  1) The set-type being enumerated (or alternatively a collection-type and element-type)
+;;;  2) The type of the operation to be applied to each element
+;;; 
+;;; The operation itself receives these inputs:
+;;;  1) A temporal sequence of places
+;;;  2) An argument to the updating function which also gets a place from the temporal sequence
+;;; 
+;;; This has a 2 join input format similar to anything that is driver by an emuerator
 ;;;
-;;; In addition this take an operation to calculate the updated value to be put back into 
-;;;  the place
-;;; And whatever other parameters (e.g. a number to divide each value by) the operation takes
-;;;   (more generally this could be a closure?)
+;;; It has no outputs; this is for effect only
+;;;
+;;; At the moment this other input is a single value, but maybe that could be generalized
+;;; somehow to a pseudo-tuple of values?
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(deftask numerical-updater
-    :super-types (procedure)
+;;; This is always run for effect and has no output
+
+(deftask updater
     :primitive nil
-    :parameters (numeric-type op-type set-type index-type updater-type)
-    :bindings ()
-    :interface ((:joins (:name more :inputs ((the-sets (temporal-sequence (set-type numeric-type)))
-					     (the-indices (temporal-sequence index-type))
-					     (the-values (temporal-sequence numeric-type))
-					     (normalizer numeric-type)))
-					     
-			(:name empty))
-		(:outputs (accumuland real-output-type))))
-
-
-
-(deftask array-acc
-    :super-types ()
-    :parameters (input-type output-type)
-    :interface ((:inputs (the-set input-type))
-		(:outputs (the-accumuland output-type)))
+    :parameters (set-type element-type collection-type op-type)
+    :bindings ((set-type (cond ((and set-type element-type) set-type)
+			       ((and collection-type element-type) (list collection-type element-type))
+			       (t set-type)))
+	       (element-type (or element-type (second set-type)))
+	       (place-type `(place ,set-type ,(index-type set-type))))
+    :interface ((:joins (:name more :inputs ((the-places (temporal-sequence place-type)) 
+					     (updater-arg element-type)))
+			(:name empty)))
     )
 
-;;; Fix: these need to be made to match the interface of filter
-(deftask empty-test
-    :primitive t
-    :parameters (element-type)
-    :interface ((:inputs (the-list (list element-type)))
-		(:branches (:name not-empty :condition (not (null the-list)))
-			   (:name empty :condition (null the-list)))))
+
+;;; This is supposed to be the equivalent of enumerate accumulate except that it's for affecting each element
+(deftask enumerate-filter-affect-each
+    ;; Fix: This is open to question
+    :bindings ((affector-arg-type (second input-type)))
+    :parameters (input-type enumerator-type filter-type affector-type)
+    :primitive nil
+    :interface ((:inputs (the-set input-type)
+			 (updater-arg affector-arg-type))
+		(:outputs (the-affected-thing input-type))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
 (deftask print
     :primitive t
@@ -911,10 +910,10 @@
 (defviewpoint column-view
     :operator column
     :super-types (vector)
-    :source (array ?element-type)
+    :source (array ?element-type 2)
     :destination (vector (column ?element-type))
     :equivalences (
-		   ((element-type (column-view (array ?element-type)))  (column ?element-type))
+		   ((element-type (column-view (array ?element-type 2)))  (column ?element-type))
 		   ((length (column-view ?array)) (array-dimension ?array 1))
 		   ((element (column-view ?array)?index) (column ?array ?index))
 		   ((length (element (column-view ?array) ?index)) (array-dimension ?array 2))
@@ -929,23 +928,28 @@
     :terms ((column-view generate traverse column_first))
     )
 
+(defmethod compound-index-type ((thing (eql 'column)) args) (declare (ignore args)) 'integer)
+(defmethod compound-index-type ((thing (eql 'column-view)) args) (declare (ignore args)) 'integer)
+(defmethod compound-index-type ((thing (eql 'row-view)) args) (declare (ignore args)) 'integer)
+(defmethod compound-index-type ((thing (eql 'row)) args) (declare (ignore args)) 'integer)
+
 (defviewpoint row-view
     :operator row
     :super-types (vector)
-    :source (array ?element-type)
+    :source (array ?element-type 2)
     :destination (vector (row ?element-type))
     :equivalences (
-		   ((element-type (row-view (array ?element-type)))  (row ?element-type))
+		   ((element-type (row-view (array ?element-type 2)))  (row ?element-type))
 		   ((length (row-view ?array)) (array-dimension ?array 1))
 		   ((element (row-view ?array) ?index) (row ?array ?index))
 		   ((length (element (row-view ?array) ?index)) (array-dimension ?array 2))
-		   ((length (row ?array ?index)) (array-dimension ?array 2 ?index))
+		   ((length (row ?array ?index)) (array-dimension ?array 2))
 		   ((element (element (row-view ?array) ?i) ?j) (aref ?array ?i ?j))
 		   ((assign (element (element (row-view ?array) ?i) ?j) ?k)
 		    (setf (aref ?array ?i ?j) ?k))
 		   ((element (row ?array ?i) ?j) (aref ?array ?i ?j))
 		   ((assign (element (row ?array ?i) ?j) ?k)
-		   (qsetf (aref ?array ?i ?j) ?k))
+		    (setf (aref ?array ?i ?j) ?k))
 		   )
     :terms ((row-view generate traverse row_first))
     )
@@ -986,6 +990,13 @@
     :parameters ()
     :interface ((:inputs (the-list (list integer)))
 		(:outputs (the-value boolean))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Numerical Operations
+;;;   output port names
+;;;   default initial-values for accumulation
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftask add
     :parameters (numeric-type)
@@ -994,6 +1005,7 @@
 		(:outputs (sum numeric-type))))
 
 (defmethod output-port-for-numeric-op ((op (eql 'add))) 'sum)
+(defmethod default-initial-value-for-acc ((op (eql 'add))) 0)
 
 (deftask subtract
     :parameters (numeric-type)
@@ -1009,7 +1021,8 @@
     :interface ((:inputs (i-1 numeric-type) (i-2 numeric-type))
 		(:outputs (product numeric-type))))
 
-(defmethod output-port-for-numeric-op ((op (eql 'multiple))) 'product)
+(defmethod output-port-for-numeric-op ((op (eql 'multiply))) 'product)
+(defmethod default-initial-value-for-acc ((op (eql 'multiply))) 1)
 
 (deftask divide
     :parameters (numeric-type)
@@ -1026,16 +1039,10 @@
 		(:outputs (count integer))))
 
 (defmethod output-port-for-numeric-op ((op (eql 'count))) 'count)
+(defmethod default-initial-value-for-acc ((op (eql 'count))) 0)
 
-(deftask affect-each
-    :parameters (object-type index-type value-type)
-    :primitive nil
-    :interface ((:joins (:name more :inputs ((the-objects (temporal-stream object-type))
-					     (the-indices (temporal-stream index-type))
-					     (the-values (temporal-stream value-type))))
-			(:name empty))
-		(:outputs ()))
-    )
+;;; probably should add min and max
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -1071,34 +1078,104 @@
 
 (deftask fetch
     :primitive t
-    :parameters (containing-object-type offset-data-type)
+    :parameters (containing-object-type index-type)
     :bindings ((element-data-type (second containing-object-type)))
-    :interface ((:Inputs (the-place (place containing-object-type offset-data-type)))
+    :interface ((:Inputs (the-place (place containing-object-type index-type)))
 		(:Outputs (the-value element-data-type)))
+    )
+
+;;; Fix: the generation stage for this needs work if it gets an abstract
+;;; object like (column x 1)
+(deftask fetch-object
+    :primitive t
+    :parameters (containing-object-type index-type)
+    :bindings ((element-data-type (first containing-object-type)))
+    :interface ((:Inputs (the-place (place containing-object-type index-type)))
+		(:Outputs (the-object containing-object-type)))
+    )
+
+
+(deftask fetch-index
+    :primitive t
+    :parameters (containing-object-type index-type)
+    :bindings ((element-data-type (second containing-object-type)))
+    :interface ((:Inputs (the-place (place containing-object-type index-type)))
+		(:Outputs (the-index index-type)))
     )
 
 (deftask assign
     :primitive t
-    :parameters (containing-object-type offset-data-type)
+    :parameters (containing-object-type index-type)
     :bindings ((element-data-type (second containing-object-type)))
-    :interface ((:inputs (the-place (place containing-object-type offset-data-type))
+    :interface ((:inputs (the-place (place containing-object-type index-type))
 			 (new-value element-data-type))
 		(:outputs)))
 
+
 (deftask place-constructor
     :primitive t
-    :parameters (containing-object-type offset-data-type)
-    :interface ((:inputs (container containing-object-type)
-			 (offset offset-data-type))
-		(:outputs (the-place (place containing-object-type offset-data-type))))
+    :parameters (set-type element-type collection-type (for-value t) output-type index-type)
+    :bindings ((set-type (cond ((and set-type element-type) set-type)
+			       ((and collection-type element-type) (list collection-type element-type))
+			       (t set-type)))
+	       (element-type (or element-type (second set-type)))
+	       (index-type (index-type set-type))
+	       (output-type (if for-value element-type `(place ,set-type ,index-type)))
+	       )
+    :interface ((:inputs (container set-type)
+			 (offset index-type))
+		(:outputs (the-place (place set-type index-type)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;  Accumulators
+;;;
+;;; there are variations on this theme.  For example
+;;; does it take a manifested set (i.e. a data structure) as input
+;;; or a temporal sequence
+;;; Does it do extraction of the elements of the set, etc.
+;;; Given this I just have two at the moment:
+;;; 1) a simple numerical one that takes a temporal sequence of numbers (should extend with extractor)
+;;; and reduces the number with some numerical op and initial value
+;;; 2) A set accumulator that takes a data structure does extraction and produces a new set
+;;; to do: make a basic accumulator and then sub-types that are set-accumulator and numerical-accumulator
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(deftask numerical-accumulator
+    :super-types (procedure)
+    :primitive nil
+    :parameters (numeric-type op initial-value)
+    :bindings ((real-input-type (if (eql op 'count) 'data-structure numeric-type))
+	       (real-output-type (if (eql op 'count) 'integer numeric-type))
+	       (initial-value (or initial-value (default-initial-value-for-acc op))))
+    :interface ((:joins (:name more :inputs ((the-sequence (temporal-sequence real-input-type))))
+			(:name empty))
+		(:outputs (accumuland real-output-type))))
+
+;;; This guy takes a manifested set (i.e. not a temporal sequence)
+;;; and accumulates an output value
+(deftask set-accumulator
+    :super-types (procedure)
+    :primitive nil
+    :parameters (input-type output-type op initial-value)
+    :bindings (;; (real-input-type (or (definition-for input-type) input-type))
+	       ;; (real-output-type (or (definition-for output-type) output-type))
+	       (initial-value (or initial-value (default-initial-value-for-acc op))))
+    :interface ((:inputs (the-sequence input-type))
+		(:outputs (accumuland output-type))))
+
+(deftask array-acc
+    :super-types ()
+    :parameters (input-type output-type)
+    :interface ((:inputs (the-set input-type))
+		(:outputs (the-accumuland output-type)))
     )
 
-(deftask normalizer
-    :primitive nil
-    :parameters (numeric-type)
-    :bindings ((vector-type `(vector ,numeric-type))
-	       (place-type `(place ,vector-type integer)))
-    :interface ((:inputs (the-places (temporal-sequence place-type))
-			 (normalizer numeric-type))
-		(:outputs ))
-    )
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; A task that normalizes each element of a set
+;;;
+;;; Fix: There are things above that purport to be this but they aren't
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+

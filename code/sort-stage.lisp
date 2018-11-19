@@ -18,28 +18,145 @@
 ;;; has to somehow make anything downstream from it also be downstream from
 ;;; the state sink.
 
+;;; A Bug: Consider a primitive-enumerator
+;;; i.e .something like an index-enumerator (Task A)
+;;; Suppose that one of the downstream tasks of Task A (Task C) has an input
+;;; that comes from an task (Task B) that isn't ordered with respect to Task A
+;;; (i.e. Task B is neither upstream nor downstream from Task A).
+;;;
+;;; There are two issues if Task B is ordered after Task A but before
+;;; the end of Task A's downstream tasks (it would have to be before the end
+;;; of Task A's downstream tasks, since it's upstream of Task C).
+;;; 
+;;; 1) Task A will stop gobbling tasks when it hits Task B because
+;;;    Task A isn't in the upstream-tasks of Task B 
+;;;     (this happens in the array normalization example)
+;;; 2) If Task C has a side-effect it will be executed on each iteration of
+;;;    the loop, which isn't semantically correct.
+;;; So even if there's a cheap fix to issue 1, issue 2 is fundamental.
+;;;
+;;; Therefore during the sort, we need to make Task B an upstream task of Task A
+;;; To find Task b, look at all downstream tasks of Task A (Task C).
+;;; Ask if Task C has an upstream task Task B that isn't downstream from Task A
+;;; If so, add Task B to the upstream tasks of Task A given to the topological sorter.
+;;; Note that this will include Task A and any upstream tasks of Task A, so you can
+;;; filter out those that are upstream of others in the set.
+;;; (note: the upstream stream tasks given to the sorter are the immediate upstream
+;;;  tasks, not all upstream tasks).  I'm pretty sure that upstream-tasks is only
+;;; called once by the sorter, so we can define an :around method for upstream tasks
+;;; on primitive-enumerator that does the search described above and adds all such
+;;; tasks to the result returned by the normal methoed.
+;;;
+;;; As a result we need to calculate all-upstream-tasks and all-downstream-tasks 
+;;; before the topological sort.  This is a standard dynamic-programming
+;;; recursive calculation where the condition for not recurring is when 
+;;; the guy hit either has no immediate upstream tasks or has all-upstream-tasks
+;;; calculated (downstream is exactly the same).
+;;; 
+
+;;; Note: The other times we sub-gobble are
+;;;  1) When creating a variable binding
+;;;  2) When creating an internal function
+;;;  not clear if these have the same issue
+
 (defgeneric upstream-tasks (task))
 (defgeneric downstream-tasks (task))
+(defgeneric all-upstream-tasks (task))
+(defgeneric all-downstream-tasks (task))
+
+;;; Fix: that upstream-tasks and downstream-tasks need to be
+;;; symmetric, but the use of find-indirectly-forced-predecessors gives
+;;; you precessors that you aren't successor off
 
 (defun topological-sort-sub-tasks (top-level-task)
-  (let* ((initial-tasks (cons top-level-task (append (find-initial-inputs (selected-implementation top-level-task)) (find-global-initial-tasks top-level-task))))
-         (sorted-tasks (topological-sort initial-tasks #'upstream-tasks #'downstream-tasks)))
-    (loop for task in initial-tasks 
+  (let* ((initial-tasks (cons top-level-task 
+			      (append (find-initial-inputs (selected-implementation top-level-task)) 
+				      (find-global-initial-tasks top-level-task))))
+	 (all-tasks nil))
+    (setq all-tasks (compute-all-upstream-and-downstream-tasks top-level-task))
+    ;; (format *trace-output* "~%All tasks ~a ~%Length ~a" all-tasks (length all-tasks))
+    (loop for task in all-tasks
         unless (eql task top-level-task)
-        do (setf (all-upstream-tasks task) (list top-level-task)))
-    (compute-upstream-tasks sorted-tasks)
-    sorted-tasks))
+        do (pushnew top-level-task  (all-upstream-tasks task)))
+    (loop for task in all-tasks do (find-indirectly-forced-predecessors task))
+    (let ((sorted-guys (topological-sort initial-tasks #'upstream-tasks #'downstream-tasks)))
+      ;;(format *trace-output* "~%Sorted tasks ~a ~%Length ~a" sorted-guys (length sorted-guys))
+      sorted-guys)))
 
-;;; This works because once the tasks are sorted it's guaranteed
-;;; that anything upstream of a task has been processed first and
-;;; therefore that guy's list of all-upstream-tasks is already complete
-;;; so all we have to do is union all of those and add in the immediate upstream tasks
-(defun compute-upstream-tasks (sorted-tasks)
-  (loop for this-task in sorted-tasks
-      do (loop for immediate-upstream-task in (upstream-tasks this-task)
-             do (pushnew immediate-upstream-task (all-upstream-tasks this-task))
-                (loop for super-task in (all-upstream-tasks immediate-upstream-task)
-                    do (pushnew super-task (all-upstream-tasks this-task))))))
+(defun compute-all-upstream-and-downstream-tasks (top-level-task)
+  (let ((initial-tasks (cons top-level-task 
+			     (append (find-initial-inputs (selected-implementation top-level-task)) 
+				     (find-global-initial-tasks top-level-task))))
+	(all-tasks nil)
+	(upstream-already-done (make-hash-table))
+	(downstream-already-done (make-hash-table)))
+    (labels ((do-upstream (task)
+	       (cond
+		((gethash task upstream-already-done)
+		 (all-upstream-tasks task))
+		((null (upstream-tasks task)) nil)
+		(t (setf (all-upstream-tasks task) (upstream-tasks task))
+		   (loop for next-task in (upstream-tasks task)
+		       do (loop for another-task in (do-upstream next-task)
+			      do (pushnew another-task (all-upstream-tasks task))))
+		   (setf (gethash task upstream-already-done) t)
+		   (all-upstream-tasks task))))
+	     (do-downstream (task)
+	       (cond
+		((gethash task downstream-already-done)
+		 (all-downstream-tasks task))
+		((null (downstream-tasks task)) nil)
+		(t (setf (all-downstream-tasks task) (downstream-tasks task))
+		   (loop for next-task in (downstream-tasks task)
+		       do (loop for another-task in (do-downstream next-task)
+			      do (pushnew another-task (all-downstream-tasks task))))
+		   (setf (gethash task downstream-already-done) t)
+		   (all-downstream-tasks task))))
+	     (pursue (task)
+	       (unless (member task all-tasks)
+		 (push task all-tasks)
+		 (do-upstream task)
+		 (do-downstream task)
+		 (loop for next in (downstream-tasks task)
+		     do (pursue next)))))
+      (loop for task in initial-tasks
+	  do (pursue task))
+      all-tasks)))
+
+(defmethod find-indirectly-forced-predecessors (task) 
+  (declare (ignore task))
+  )
+
+(defmethod find-indirectly-forced-predecessors ((task branch))
+  (let ((answers nil)
+	(branching-task (superior task)))
+    (labels ((move-upward (downstream-ancestor)
+	       (cond ((eql downstream-ancestor task))
+		     ((and (not (member downstream-ancestor (all-downstream-tasks task)))
+			   (not (member task (all-downstream-tasks downstream-ancestor))))
+		      (pushnew downstream-ancestor answers))
+		     (t (loop for next-up in (upstream-tasks downstream-ancestor)
+			    do (move-upward next-up)
+			       )))))
+      (loop for downstream in (all-downstream-tasks task)
+	  do (loop for next-up in (upstream-tasks downstream)
+		 do (move-upward next-up))))
+    (loop for answer in answers
+	do (push branching-task (cached-downstream-tasks answer))
+	   (push answer (cached-upstream-tasks branching-task)))
+    answers)
+    )
+      
+;;;;;; This works because once the tasks are sorted it's guaranteed
+;;;;;; that anything upstream of a task has been processed first and
+;;;;;; therefore that guy's list of all-upstream-tasks is already complete
+;;;;;; so all we have to do is union all of those and add in the immediate upstream tasks
+;;;(defun compute-upstream-tasks (sorted-tasks)
+;;;  (loop for this-task in sorted-tasks
+;;;      do (loop for immediate-upstream-task in (upstream-tasks this-task)
+;;;             do (pushnew immediate-upstream-task (all-upstream-tasks this-task))
+;;;                (loop for super-task in (all-upstream-tasks immediate-upstream-task)
+;;;                    do (pushnew super-task (all-upstream-tasks this-task))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -65,13 +182,26 @@
 ;;;   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defclass proxy-task ()
+
+
+(defmethod upstream-tasks :around (task)
+  (or (cached-upstream-tasks task)
+      (let ((answer (call-next-method)))
+	(setf (cached-upstream-tasks task) answer)
+	answer)))
+
+(defmethod downstream-tasks :around (task)
+  (or (cached-downstream-tasks task)
+      (let ((answer (call-next-method)))
+	(setf (cached-downstream-tasks task) answer)
+	answer)))
+
+(defclass proxy-task (up-down-cache-mixin)
   ((join :accessor join :initarg :join :initform nil)
    (real-task :accessor real-task :initarg :real-task :initform nil)
    ;; these are proxies or joins
    (downstream-stuff :accessor downstream-stuff :initform nil)
    (upstream-stuff :accessor upstream-stuff :initform nil)
-   (all-upstream-tasks :accessor all-upstream-tasks :initform nil)
    ))
 
 (defmethod print-object ((proxy proxy-task) stream)
@@ -106,7 +236,7 @@
 	     (push proxy (upstream-stuff new-proxy))
 	     (push new-proxy proxies)
 	  finally (setf (downstream-stuff proxy) proxies)))
-      proxies) 
+      proxies)
   )
 
 (defmethod upstream-tasks ((proxy proxy-task))
@@ -151,11 +281,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(defclass completion-task ()
+(defclass completion-task (up-down-cache-mixin)
   ((real-task :initarg :real-task :accessor real-task)
    ;; need this at the end of sorting stage
-   (all-upstream-tasks :initform nil :accessor all-upstream-tasks))
-  )
+   ))
 
 (defmethod task-type ((task completion-task)) 'completion-pseudo-task)
 
@@ -177,37 +306,53 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
-;;; Used sub-routines
+;;; Useful sub-routines
+;;;
+;;; Written to avoid duplicates in the answer
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmethod all-dataflow-sources ((task has-input-ports-mixin))
-  (loop for input in (inputs task)
-      for dflows = (incoming-flows input)
-      nconc (loop for dflow in dflows
-		collect (task (input dflow)))))
+  (let ((answer nil))
+    (loop for input in (inputs task)
+	for dflows = (incoming-flows input)
+	do (loop for dflow in dflows
+	       do (pushnew (task (input dflow)) answer)))
+    answer))
 
 (defmethod all-control-flow-sources ((task has-predecessors-mixin))
-  (loop for cflow in (incoming-control-flows task)
-      collect (predecessor cflow)))
+  (let ((answer nil))
+    (loop for cflow in (incoming-control-flows task)
+	do (pushnew (predecessor cflow) answer))
+    answer))
 
 (defmethod all-data-and-control-sources ((task input-side-mixin))
-  (nconc (all-dataflow-sources task)
-	 (all-control-flow-sources task)))
+  (let ((answer nil))
+    (loop for thing in (all-dataflow-sources task)
+	do (pushnew thing answer))
+    (loop for thing in (all-control-flow-sources task)
+	do (pushnew thing answer))
+    answer))
 
 (defmethod all-dataflow-targets ((task has-output-ports-mixin))
-  (loop for output in (outputs task)
-      for dflows = (outgoing-flows output)
-      nconc (loop for dflow in dflows
-		collect (task (output dflow)))))
+  (let ((answer nil))
+    (loop for output in (outputs task)
+	for dflows = (outgoing-flows output)
+	do (loop for dflow in dflows
+	       do (pushnew (task (output dflow)) answer)))
+    answer))
 
 (defmethod all-control-flow-targets ((task has-successors-mixin))
-  (loop for cflow in (outgoing-control-flows task)
-      collect (successor cflow)))
+  (let ((answer nil))
+    (loop for cflow in (outgoing-control-flows task)
+	do (Pushnew (successor cflow) answer))
+    answer))
 
 (defmethod all-data-and-control-targets ((task output-side-mixin))
-  (nconc (all-dataflow-targets task)
-	 (all-control-flow-targets task)))
+  (let ((answer nil))
+    (loop for target in (all-dataflow-targets task) do (pushnew target answer))
+    (loop for target in (all-control-flow-targets task) do (pushnew target answer))
+    answer))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -236,11 +381,13 @@
       always (is-final-task? branch)))
 
 (defmethod find-final-tasks ((ct composite-task) &optional no-path-ends)
-  (loop for task in (children ct)
-      when (and (is-final-task? task)
-		(or (null no-path-ends)
-		    (not (typep task 'path-end))))
-      collect task))
+  (let ((answer nil))
+    (loop for task in (children ct)
+	when (and (is-final-task? task)
+		  (or (null no-path-ends)
+		      (not (typep task 'path-end))))
+	do (pushnew task answer))
+    answer))
 
 ;;; Default is t which is always safe
 ;;; Notice that this default case
@@ -264,16 +411,18 @@
       always (is-initial-task? join)))
 
 (defmethod find-initial-tasks ((ct composite-task))
-  (loop for task in (children ct)
-      when (is-initial-task? task)
-      collect task))
+  (let ((answer nil))
+    (loop for task in (children ct)
+	when (is-initial-task? task)
+	do (pushnew task answer))
+    answer))
 
 (defmethod corresponding-parent-task ((task has-superior-mixin))
   (let ((parent (superior task)))
-      (when parent 
-        (let ((abstract-task (abstract-task parent)))
-          (when abstract-task
-            abstract-task)))))
+    (when parent 
+      (let ((abstract-task (abstract-task parent)))
+	(when abstract-task
+	  abstract-task)))))
 
 (defmethod corresponding-parent-task ((task branch))
   ;; the superior is the branching task
@@ -328,7 +477,7 @@
 (defmethod upstream-tasks ((task local-element-mixin))
   ;; Note that if it's global the around task above will get called
   ;; rather than thin
-  (corresponding-parent-task task))
+  (list (corresponding-parent-task task)))
 
 (defmethod upstream-tasks ((task initial-input))
   (list (corresponding-parent-task task)))
@@ -340,10 +489,13 @@
       (list (corresponding-parent-task task))
     ;; otherwise get the predecessors and for each
     ;; collect its completion task if it's not a branch or something opaque
-    (loop for predecessor in (all-data-and-control-sources task)
-	if (or (typep predecessor 'branch) (not (typep predecessor 'task-interface-mixin))  (primitive? predecessor) (dont-expand predecessor))
-	collect predecessor
-	else collect (get-completion-task predecessor))
+    (let ((answer nil))
+      (loop for predecessor in (all-data-and-control-sources task)
+	  if (or (typep predecessor 'branch) (not (typep predecessor 'task-interface-mixin))
+		 (primitive? predecessor) (dont-expand predecessor))
+	  do (pushnew predecessor answer)
+	  else do (pushnew (get-completion-task predecessor) answer))
+      answer)
     ))
 
 ;;; For a branch of a primitive branching task
@@ -360,7 +512,7 @@
 ;;; which are input-side-mixin so normal methods apply to them
 ;;; For non-primitive we use normal compound-task methods
 (defmethod upstream-tasks ((task primitive-joining-task))
-  (list (joins task)))
+  (joins task))
 
 (defmethod upstream-tasks ((task joining-task))
   (if (getf (properties task) 'dont-expand)
@@ -402,7 +554,7 @@
 	  ;; for which get-completion-task would fail!!!!
 	  (let ((completion-task (get-completion-task parent-task)))
 	    (when completion-task
-	      (push completion-task answer))))))
+	      (pushnew completion-task answer))))))
     (unless (or (primitive? task) (dont-expand task))
       ;; so it has an implementation and we need to include all it's
       ;; initial tasks except for those that are non-local constants
@@ -438,19 +590,19 @@
 ;;; Fix: Need to integrate this with the stuff below
 ;;; right now there are two methods for this and the 
 ;;; other one comes later
-(defmethod downstream-tasks ((join join))
-  (let ((joining-task (superior join)))
-    (cond
-     ((typep joining-task 'primitive-joining-task)
-      (let ((proxies (downstream-proxies join)))
-	(when (null proxies)
-	  (loop for task in (downstream-tasks joining-task)
-	      for proxy = (make-instance 'proxy-task :join join :real-task task)
-	      do (push join (upstream-stuff proxy))
-		 (push proxy proxies)
-	      finally (setf (downstream-proxies join) proxies)))
-	proxies))
-     (t (break "Need to handle joins on non primitive tasks")))))
+;;;(defmethod downstream-tasks ((join join))
+;;;  (let ((joining-task (superior join)))
+;;;    (cond
+;;;     ((typep joining-task 'primitive-joining-task)
+;;;      (let ((proxies (downstream-proxies join)))
+;;;	(when (null proxies)
+;;;	  (loop for task in (downstream-tasks joining-task)
+;;;	      for proxy = (make-instance 'proxy-task :join join :real-task task)
+;;;	      do (push join (upstream-stuff proxy))
+;;;		 (push proxy proxies)
+;;;	      finally (setf (downstream-proxies join) proxies)))
+;;;	proxies))
+;;;     (t (break "Need to handle joins on non primitive tasks")))))
 
 (defmethod downstream-tasks ((task join))
   (let ((joining-task (superior task)))

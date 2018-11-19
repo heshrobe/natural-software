@@ -361,9 +361,21 @@
         for initial-input = (task corresponding-port)
         for viewpoint-to-apply = (viewpoint-to-apply real-task real-implementation name)
         when viewpoint-to-apply 
-        do (setf (value token) (list viewpoint-to-apply value)
-                 ;; here the form slot is used to hold the original value
-                 (form token) value)
+	     ;; Fix: Suppose there are two consumers of this top level argument
+	     ;; Then each of them will do this setf leading to things like
+	     ;; (column-view (column-view ...))
+	     ;; Probably it would be better to create a new token and maybe link it back to the original
+	     ;; if that's necessary
+        do (let ((new-token (make-instance (cl:type-of token)
+			      :producer (producer token)
+			      :port (port token)
+			      :type (type-constraint token)
+			      :value (list viewpoint-to-apply (value token))
+			      :form (value token))))
+	     ;;(setf (value token) (list viewpoint-to-apply value)
+	     ;; here the form slot is used to hold the original value
+	     ;;  (form token) value)
+	     (setq token new-token))
         unless corresponding-port do (error "No corresponding port ~a ~a" task name)
         do (setf (corresponding-port corresponding-port) input-port
                  (corresponding-port input-port) initial-input)
@@ -388,7 +400,8 @@
                                      )))
                (set-port-symbolic-token corresponding-port symbolic-token)))
             (t ;; just push the token along unchanged
-             (set-port-symbolic-token corresponding-port token))))))
+             (set-port-symbolic-token corresponding-port token)
+	     )))))
 
 (defmethod propagate-values-to-selected-implementation :before ((task join) (implementation entry-point))
   (setf (corresponding-join implementation) task)
@@ -795,8 +808,9 @@
 	 (offset-value (value offset-token))
 	 (offset-type (type-constraint offset-token))
 	 (output-port (port-named 'output 'the-place task))
+	 (place-name (next-instance-of-variable 'place))
 	 (output-token (make-token place-symbolic-value
-			 :value 'place	;??
+			 :value place-name
 			 :port output-port
 			 :producer task
 			 :offset offset-value

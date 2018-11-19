@@ -75,11 +75,21 @@
   ((proxies :initform nil :accessor proxies))
   )
 
+;;; this mixin is used by the sort-stage of the code generator but
+;;; it's mixed into a bunch of core things in this file
+
+(defclass up-down-cache-mixin ()
+  ((cached-upstream-tasks :initform nil :accessor cached-upstream-tasks)
+   (cached-downstream-tasks :initform nil :accessor cached-downstream-tasks)
+   (all-upstream-tasks :accessor all-upstream-tasks :initform nil)
+   (all-downstream-tasks :accessor all-downstream-tasks :initform nil)))
+
 ;;; A basic building block
-(defclass core-task-mixin (has-proxies-mixin has-display-tick-mixin has-pathname-mixin has-task-type-mixin simulation-support-mixin)
+(defclass core-task-mixin (has-proxies-mixin has-display-tick-mixin
+			   has-pathname-mixin has-task-type-mixin simulation-support-mixin 
+			   up-down-cache-mixin)
   ((selected? :initform nil :accessor selected?)
    (output-record :initform nil :accessor output-record)
-   (all-upstream-tasks :initform nil :accessor all-upstream-tasks)
    )
   )
 
@@ -982,6 +992,12 @@
 		 (pushnew ?property answer)))
     answer))
 
+(defparameter *type-parameter-table* (make-hash-table))
+
+(defun get-parameters-in-order (type)
+  (gethash type *type-parameter-table* )
+  )
+
 (defun is-enumerator-task (super-types)
   (labels ((do-one (type)
 	     (when (eql type 'basic-enumerator)
@@ -1008,6 +1024,8 @@
 		   (do-one ?parent))))
     (loop for type in super-types do (do-one type)))
   nil)
+
+(defgeneric property-defaulter (type properties &rest other-names))
 
 (defun defstuff-internal (type-name 
 			  &key procedure implementation interface primitive dont-expand ;only for procedure types
@@ -1061,7 +1079,7 @@
 				when default-value 
 				do (when (and (symbolp default-value) (not (member default-value parameters-plus-bindings)))
 				     (setq default-value `',default-value))
-				   (push `(unless (getf properties ,keyword)
+				   (push `(when (eql :no-value (getf properties ,keyword :no-value))
 					    (setq properties (nconc (list ,keyword ,default-value) properties)))
 					 property-defaults)
 				collect keyword collect name))
@@ -1116,6 +1134,7 @@
       
       ;; And finally the code
       `(eval-when (:load-toplevel :execute :compile-toplevel)
+	 (setf (gethash ',type-name *type-parameter-table*) '(,@local-parameters))
 	 (tell [is-type ,type-name])
 	 ,@(loop for (part-name part-data-type) in parts
 	       collect `(tell [has-part ,type-name ,part-name ,part-data-type]))
@@ -1136,7 +1155,11 @@
 		   (declare (ignorable ,@all-parameters))
 		   (let* ,(process-deftask-bindings bindings)
 		     (declare (ignorable ,@bindings-names))
-		     ,@(nreverse property-defaults)
+		     (setq properties (property-defaulter ',type-name properties ,@parameters-plus-bindings))
+		     ,@(when super-types
+			 (loop for super-type in (remove 'procedure (remove 'computational-stuff super-types))
+			     for his-parameters = (get-parameters-in-order super-type)
+			     collect `(setq properties (property-defaulter ',super-type properties ,@his-parameters))))
 		     ,@(when dont-expand `((setq properties (nconc (list :dont-expand t) properties))))
 		   (let ((the-task (make-instance ',task-type
 				     :task-type ',type-name
@@ -1146,6 +1169,11 @@
 				     ,@extra-creation-args
 				     )))
 		     (build-task-interface task-type the-task))))
+		 (defmethod property-defaulter ((task-type (eql ',type-name)) properties &rest bindings)
+		   (destructuring-bind (,@parameters-plus-bindings) bindings
+		     (declare (ignorable ,@parameters-plus-bindings))
+		     ,@(nreverse property-defaults)
+		     properties))
 		 (defmethod build-task-interface ((task-type (eql ',type-name)) the-task)
 		   ;; :add-type-descriptions? t below means that if the parent has already provided a port
 		   ;; just add typing information
