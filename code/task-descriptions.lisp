@@ -238,7 +238,7 @@
 
 (define-predicate-method (expand-forward-rule-trigger port-name-and-direction) (support-variable-name truth-value context bound-variables)
   (declare (ignore context bound-variables)) 
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error "The rule pattern ~s does not have a truth-value of true" self))
   (with-predication-maker-destructured (port direction name) self
     `(:procedure
@@ -261,7 +261,7 @@
 
 (define-predicate-method (expand-forward-rule-trigger parameter-pattern-value) (support-variable-name truth-value context bound-variables)
   (declare (ignore context bound-variables)) 
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error "The rule pattern ~s does not have a truth-value of true" self))
   (with-predication-maker-destructured (instance type pattern instantiated-pattern) self
     `(:procedure
@@ -426,10 +426,10 @@
   (with-statement-destructured (thing) self
     (let ((current-truth-value (predication-truth-value self)))
       (cond
-       ((and (eql old-truth-value *unknown*)
-	     (eql current-truth-value *true*))
+       ((and (eql old-truth-value +unknown+)
+	     (eql current-truth-value +true+))
 	(setf (is-problematic? thing) t))
-       ((eql current-truth-value *unknown*)
+       ((eql current-truth-value +unknown+)
 	(setf (is-problematic? thing) nil))))))
 
 (defrule problematic-flow-means-problematic-ports (:forward)

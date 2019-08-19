@@ -1452,7 +1452,7 @@
 (define-predicate parse-type-answer (texp aggregate type) (default-predicate-model))
 
 (define-predicate-method (ask-data relation-of) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	   :query self
 	   :model (common-lisp:type-of self)))
@@ -1467,11 +1467,11 @@
 	  (with-unification
 	      (unify  relation interned-thing)
 	    (unify rel-name name)
-	    (stack-let ((backward-support (list self *true* '(ask-data relation-of))))
+	    (stack-let ((backward-support (list self +true+ '(ask-data relation-of))))
 		       (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data subject-of) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	   :query self
 	   :model (common-lisp:type-of self)))
@@ -1486,11 +1486,11 @@
 	  (with-unification
 	      (unify subject interned-thing)
 	    (unify subject-name name)
-	    (stack-let ((backward-support (list self *true* '(ask-data subject-of))))
+	    (stack-let ((backward-support (list self +true+ '(ask-data subject-of))))
 		       (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data object-of) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	   :query self
 	   :model (common-lisp:type-of self)))
@@ -1505,11 +1505,11 @@
 	  (with-unification
 	      (unify (object texp) interned-thing)
 	    (unify object-name name)
-	    (stack-let ((backward-support (list self *true* '(ask-data object-of))))
+	    (stack-let ((backward-support (list self +true+ '(ask-data object-of))))
 		       (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data as-relation) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	    :query self
 	    :model (common-lisp:type-of self)))
@@ -1523,11 +1523,11 @@
       (loop for possible-answer in (as-relation interned-thing)
 	  do (with-unification
 		 (unify possible-answer texp)
-	       (stack-let ((backward-support (list self *true* '(ask-data as-relation))))
+	       (stack-let ((backward-support (list self +true+ '(ask-data as-relation))))
 			  (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data as-subject) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	    :query self
 	    :model (common-lisp:type-of self)))
@@ -1541,11 +1541,11 @@
       (loop for possible-answer in (as-subject interned-thing)
 	  do (with-unification
 		 (unify possible-answer texp)
-	       (stack-let ((backward-support (list self *true* '(ask-data as-subject))))
+	       (stack-let ((backward-support (list self +true+ '(ask-data as-subject))))
 			  (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data as-object) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	    :query self
 	    :model (common-lisp:type-of self)))
@@ -1559,11 +1559,11 @@
       (loop for possible-answer in (as-object interned-thing)
 	  do (with-unification
 		 (unify possible-answer texp)
-	       (stack-let ((backward-support (list self *true* '(ask-data as-object))))
+	       (stack-let ((backward-support (list self +true+ '(ask-data as-object))))
 			  (funcall continuation backward-support))))))))
 
 (define-predicate-method (ask-data name) (truth-value continuation)
-  (unless (eql truth-value *true*)
+  (unless (eql truth-value +true+)
     (error 'ji:model-can-only-handle-positive-queries
 	    :query self
 	    :model (common-lisp:type-of self)))
@@ -1576,7 +1576,7 @@
      (t
       (with-unification
 	  (unify name (name interned-thing))
-	(stack-let ((backward-support (list self *true* '(ask-data name))))
+	(stack-let ((backward-support (list self +true+ '(ask-data name))))
 		   (funcall continuation backward-support)))))))
 
 (defun stringify (thing &optional recursive)
