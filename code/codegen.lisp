@@ -123,7 +123,9 @@
       when (or 
             ;; an allocate can have inputs, it's only top level
             ;; when it doesn't
-            (and (eql (task-type task) 'allocate) (null (inputs task)))
+            (and (eql (task-type task) 'allocate) 
+		 (null (inputs task))
+		 (null (incoming-control-flows task)))
             (eql (task-type task) 'constant))
       collect task))
 
@@ -369,7 +371,10 @@
          )
     (declare (ignore implementation))
     (when (is-a-simple-stream-processor top-level-task)
-      ;; Hack: the order of pushes matters here
+      ;; Hack: remove the guys we want to be added in order
+      ;; the order of pushes matters here
+      (setq top-level-arguments (remove output top-level-arguments))
+      (setq top-level-arguments (remove input-1 top-level-arguments))
       (pushnew output top-level-arguments)
       (pushnew input-1 top-level-arguments)
       )
@@ -378,7 +383,7 @@
       (declare (special *all-tasks*))
       ;; (print *all-tasks* *trace-output*)
       (let ((the-code (gobble-code language caller)))
-        (code-for-top-level-task top-level-task top-level-arguments  
+        (code-for-top-level-task top-level-task top-level-arguments
                                  the-code language
                                  ;; This form is here because you can only get this initializations after code
                                  ;; geneation has gone through (to establish all the form slots in the tokens)

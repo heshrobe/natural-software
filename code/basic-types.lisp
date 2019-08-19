@@ -956,11 +956,12 @@
 ;;; but we should just specify it 
 
 (defmacro defdata-type (name &rest stuff &key super-types parameters definition 
+					      allocation-code
 					      parts
 					      other-assertions declarations
 					      equivalences union 
 					      bindings)
-  (declare (ignore parts parameters definition other-assertions declarations equivalences union bindings))
+  (declare (ignore parts parameters definition other-assertions declarations equivalences union bindings allocation-code))
   ;;(pushnew 'data-structure super-types)
   (remf stuff :super-types)
   (apply #'defstuff-internal name
@@ -1034,6 +1035,7 @@
 			       equivalences union ;only for data-structures
 			       parts	;only for data-structures
 			       bindings
+			       allocation-code
 			       )
   (declare (ignore data-structure))
   ;; so that nothing is its own super-type
@@ -1148,6 +1150,7 @@
 	 ,@output-related-tells
 	 ,@(reverse branch-related-tells)
 	 ,@(reverse join-related-tells)
+	 ,@(generate-allocator type-name allocation-code)
 	 ,@(when procedure
 	     `(,@(unless (eql type-name 'computational-stuff)
 		   `((setf (gethash ',type-name *task-type-hash-table*) t)))
@@ -1158,7 +1161,8 @@
 		     (setq properties (property-defaulter ',type-name properties ,@parameters-plus-bindings))
 		     ,@(when super-types
 			 (loop for super-type in (remove 'procedure (remove 'computational-stuff super-types))
-			     for his-parameters = (get-parameters-in-order super-type)
+			     for his-parameters = (union (get-parameters-in-order super-type)
+							 (get-inherited-parameters super-types))
 			     collect `(setq properties (property-defaulter ',super-type properties ,@his-parameters))))
 		     ,@(when dont-expand `((setq properties (nconc (list :dont-expand t) properties))))
 		   (let ((the-task (make-instance ',task-type
@@ -1220,6 +1224,15 @@
 			 the-task))))
 	     )))))
 
+(defgeneric allocator-for (allocator data-type language &key &allow-other-keys))
+
+(defun generate-allocator (data-type language-forms)
+  (when language-forms
+    (loop for (language . allocation-arg) in language-forms
+	collect (destructuring-bind (arglist &rest code) allocation-arg
+		  (let ((fixed-arglist `(&key ,@arglist &allow-other-keys)))
+		    `(defmethod allocator-for ((allocation-task task-interface) (type (eql ',data-type)) (language (eql ,language)) ,@fixed-arglist) ,@code))))))
+
 (defun process-port-description (task-type direction parent description parameters &optional (predicate 'has-port) branch-name)
   (flet ((do-the-real-work (description &optional condition)
 	   (let* ((real-name (if (symbolp description) description (first description)))
@@ -1253,8 +1266,13 @@
 
 
 (defun simplest-version (type-constraint)
-  (or (is-definition-of type-constraint)
-      type-constraint))
+  (labels ((do-one-level (form)
+	     (cond ((is-definition-of form))
+		   ((listp form)
+		    (loop for thing in form collect (do-one-level thing)))
+		   (t form))))
+    (do-one-level type-constraint)))
+    
 
 (defun compute-evaluation-version (form variables)
   (labels ((do-one-level (form)

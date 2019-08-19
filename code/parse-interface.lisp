@@ -853,7 +853,7 @@
     (loop for texp in texps
 	for answer = (subject texp)
 		     ;; Note that it must be Yes
-	for yes = (gethash '|Yes| (constant-hash-table parser))
+	for yes = (gethash '|yes| (constant-hash-table parser))
 	for boolean = (object texp)
 	when (eql boolean yes)
 	collect answer)))
@@ -863,7 +863,7 @@
 	 (texp (first (as-relation main-connective)))
 	 (answer (subject texp))
 	 ;; Note that it must be Yes
-	 (yes (gethash '|Yes| (constant-hash-table parser)))
+	 (yes (gethash '|yes| (constant-hash-table parser)))
 	 (boolean (object texp)))
     (when (eql boolean yes)
       answer)))
@@ -1072,7 +1072,7 @@
   (let* ((related-to-texp (intern-and-add-texp generator (list owner (intern-new-instance generator '|related-to|) owned))))
     (when is-pp?
       (intern-and-add-texp generator (list related-to-texp (intern-constant generator '|is_pp|)
-					   (intern-constant generator '|Yes|)))
+					   (intern-constant generator '|yes|)))
     related-to-texp
     )))
 
@@ -1080,7 +1080,7 @@
   (let ((the-verb (intern-new-instance generator verb-string)))
     (when negative (make-verb-negative generator the-verb))
     (when tense (add-verb-modifier generator the-verb '|has_tense| tense))
-    (when progressive (add-verb-modifier generator the-verb '|is_progressive| '|Yes|))
+    (when progressive (add-verb-modifier generator the-verb '|is_progressive| '|yes|))
     (when modality (add-verb-modifier generator the-verb '|has_modal| modality))
     (when voice (add-verb-modifier generator the-verb '|has_voice| voice))
     the-verb))
@@ -1095,7 +1095,7 @@
 (defmethod make-verb-negative ((generator question-generator) (verb instance))
   (intern-and-add-texp generator (list verb
 				       (intern-constant generator '|is_negative|)
-				       (intern-constant generator '|Yes|))))
+				       (intern-constant generator '|yes|))))
 
 (defmethod add-relative-clause ((generator question-generator) (subject instance) (relation instance) (object instance) &key (connective nil))
   (let ((the-clause (intern-and-add-texp generator (list subject relation object))))
@@ -1109,7 +1109,7 @@
 (defmethod create-main-clause ((generator question-generator) subject relation object 
 			       &key (is-question? nil) (subject-is-wh? nil) (is-imperative? nil) (is-passive? nil))
   (let ((main-clause (intern-and-add-texp generator (list subject relation object)))
-	(yes-constant (intern-constant generator '|Yes|)))
+	(yes-constant (intern-constant generator '|yes|)))
     (intern-and-add-texp generator (list main-clause
 					 (intern-constant generator '|is_main|)
 					 yes-constant))

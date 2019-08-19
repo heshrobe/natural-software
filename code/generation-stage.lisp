@@ -1,4 +1,4 @@
-;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Joshua -*-
+k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Joshua -*-
 
 (in-package :natsoft)
 
@@ -383,6 +383,7 @@
 (defmethod value-for-type-in-language ((value (eql 'true)) (type (eql 'boolean)) (language (eql :java))) '|true|)
 (defmethod value-for-type-in-language ((value (eql 'false)) (type (eql 'boolean)) (language (eql :lisp))) nil)
 (defmethod value-for-type-in-language ((value (eql 'false)) (type (eql 'boolean)) (language (eql :java))) '|false|)
+(defmethod value-for-type-in-language ((value symbol) (type (eql 'symbol)) (language (eql :lisp))) `',value)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -395,20 +396,26 @@
   (let* ((output-port (first (outputs task)))
          (type (port-type-constraint output-port))
          (output-token (symbolic-token output-port))
-         (input-ports (inputs task))
-         (input-tokens (mapcar #'symbolic-token input-ports))
-         (input-values (mapcar #'value input-tokens))
-         (allocation-code (allocation-code type language))
+         ;; (input-ports (inputs task))
+         ;; (input-tokens (mapcar #'symbolic-token input-ports))
+         ;; (input-values (mapcar #'value input-tokens))
          )
-    (setf (form output-token) allocation-code)
-    (case language
-      (:lisp *defer-token*)
-      (:java
-       ;; Fix: What's the right way to avoid allocating things that aren't real types
-       (if (and (listp type) (eql (first type) 'temporal-sequence))
-	   *defer-token*
-       `(:allocate ,(value output-token) ,type ,@input-values))))
-    ))
+    (cond
+     ((and (eql language :lisp) (listp type) (eql (first type) 'temporal-sequence))
+      *defer-token*)
+     ((eql language :lisp)
+      (setf (form output-token) (allocation-code task type language))
+      *defer-token*
+      ))))
+
+;;;    (case language
+;;;      (:lisp *defer-token*)
+;;;      (:java
+;;;       ;; Fix: What's the right way to avoid allocating things that aren't real types
+;;;       (if (and (listp type) (eql (first type) 'temporal-sequence))
+;;;	   *defer-token*
+;;;       `(:allocate ,(value output-token) ,type ,@input-values))))
+;;;    ))
 
 ;;; If it's a local state-source then we need to emit bindings
 ;;; I guess local ones are done magically at the beginning in code gen.
@@ -822,14 +829,16 @@
     `(:break |abnormal-exit|)))
 
 (defmethod form-for ((task task-interface) (task-type (eql 'put)) (language (eql :lisp)))
-  (let* ((output (first (outputs task)))
-	 (output-token (symbolic-token output))
-	 (output-form (form output-token))
+  (let* ((data-input (port-named 'input 'data task))
+	 (data-token (symbolic-token data-input))
+	 (sequence-input (port-named 'input 'sequence task))
+	 (sequence-token (symbolic-token sequence-input))
+	 (sequence-type (type-constraint sequence-token))
 	 )
     ;; probably the output token should encode whether 
     ;; the put actually does something in a better way than this
-    (if (and output-form (eql (first output-form) 'enqueue))
-	output-form
+    (if (and (listp sequence-type) (eq (first sequence-type) 'stream))
+	`(enqueue ,(value data-token) ,(value sequence-token))
       *defer-token*)))
 
 

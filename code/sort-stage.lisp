@@ -74,13 +74,15 @@
 				      (find-global-initial-tasks top-level-task))))
 	 (all-tasks nil))
     (setq all-tasks (compute-all-upstream-and-downstream-tasks top-level-task))
-    ;; (format *trace-output* "~%All tasks ~a ~%Length ~a" all-tasks (length all-tasks))
+    ;;(format *trace-output* "~%All tasks ~a ~%Length ~a" all-tasks (length all-tasks))
     (loop for task in all-tasks
         unless (eql task top-level-task)
         do (pushnew top-level-task  (all-upstream-tasks task)))
-    (loop for task in all-tasks do (find-indirectly-forced-predecessors task))
+    (let ((branch-ht (build-branch-basic-blocks all-tasks)))
+      (loop for task in all-tasks 
+	  when (typep task 'branch)
+	  do (find-indirectly-forced-predecessors task branch-ht)))
     (let ((sorted-guys (topological-sort initial-tasks #'upstream-tasks #'downstream-tasks)))
-      ;;(format *trace-output* "~%Sorted tasks ~a ~%Length ~a" sorted-guys (length sorted-guys))
       sorted-guys)))
 
 (defun compute-all-upstream-and-downstream-tasks (top-level-task)
@@ -123,27 +125,99 @@
 	  do (pursue task))
       all-tasks)))
 
-(defmethod find-indirectly-forced-predecessors (task) 
-  (declare (ignore task))
-  )
+;;; What this is about:
+;;; consider the code along one path downstream from a branch B.  Some action A along this path
+;;; might take an input that is produced by some component C that isn't downstream from B.
+;;; You want to make sure that that predecessor doesn't get generated inside the branch since it doesn't
+;;; depend on the branch condition.  The way to do this is to make the branching task (i.e. the supererior of B)
+;;; be downstream from C.
+;;;            C      --------
+;;;            |      |      |
+;;;            |      --------
+;;;            |      | B |  |
+;;;            |      ________
+;;;            \   /
+;;;               A
+;;;
+;;; One special case is an enumerator where if you didn't lift C out of the branch's basic block
+;;; it would occur on each iteration (and if it has side effects that would be completely wrong).
+;;; So what you need to do is for each branch B trace downstream until the path terminates either at a
+;;; join or a dead end.  For everything on that path e.g. A, you have to check its immediate predecessors C
+;;; and see if any of the are not downstream from B.  If so you add B's parent (the branching task)
+;;; to the successors of C.
+;;; One minor complication is that as you trace down the sucessors of B you might encounter another branch B'
+;;; if so you need to then trace its basic block and then return to tracing B's.
 
-(defmethod find-indirectly-forced-predecessors ((task branch))
-  (let ((answers nil)
-	(branching-task (superior task)))
-    (labels ((move-upward (downstream-ancestor)
-	       (cond ((eql downstream-ancestor task))
-		     ((and (not (member downstream-ancestor (all-downstream-tasks task)))
-			   (not (member task (all-downstream-tasks downstream-ancestor))))
-		      (pushnew downstream-ancestor answers))
-		     (t (loop for next-up in (upstream-tasks downstream-ancestor)
-			    do (move-upward next-up)
-			       )))))
-      (loop for downstream in (all-downstream-tasks task)
-	  do (loop for next-up in (upstream-tasks downstream)
-		 do (move-upward next-up))))
+(defmethod build-branch-basic-blocks (all-tasks)
+  (let ((blocks-ht (make-hash-table)))
+    (labels 
+	((follow-this-branch (branch)
+	   ;; We collect the block starting at this branch
+	   ;; and ending at either a join or a dead-end
+	   ;; If it's a join we return that
+	   (let ((answer )
+		 (downstream-guys nil) 
+		 (terminator nil))
+	     (cond
+	      ((setq answer (gethash branch blocks-ht))
+	       (setq downstream-guys (first answer)
+		     terminator (second answer)))
+	      (t
+		 (loop for component in (downstream-tasks branch)
+		     do (pushnew component downstream-guys)
+		     if (is-a-real-join component)
+		     do (pushnew component downstream-guys) (setq terminator component)
+		     else do (multiple-value-bind (his-downstream-guys his-terminator)
+				 (follow-this-component component :for-branch t)
+			       (setq downstream-guys (union his-downstream-guys downstream-guys))
+			       (when (typep his-terminator 'join)
+				 (setq terminator his-terminator))))
+		 (setf (gethash branch blocks-ht) (list downstream-guys terminator))))
+	     (values downstream-guys terminator)))
+	 (is-a-real-join (component)
+	   (and (typep component 'join) (typep (superior component) 'primitive-joining-task)))
+	 (follow-this-component (component &key (for-branch t))
+	   (let ((downstream-guys (list component)) (terminator nil))
+	     (cond 
+	      ((and for-branch (is-a-real-join component))
+	       (setq  terminator component))
+	      ((typep component 'branch)
+	       ;; gobble the branch's basic block and then keep	       
+	       ;; going with everything after it
+	       (multiple-value-bind (his-downstream-guys his-terminator) 
+		   (follow-this-branch component)
+		 (setq downstream-guys (union his-downstream-guys downstream-guys))
+		 ;; If the branch ended at a join, rather than a dead end
+		 ;; then we need to continue the tracing from the join
+		 (when his-terminator
+		   (multiple-value-bind (his-downstream-guys his-terminator) (follow-this-component his-terminator :for-branch for-branch)
+		     (setq downstream-guys (union his-downstream-guys downstream-guys)
+			   terminator his-terminator)))))
+	      (t (loop for component in (downstream-tasks component)
+		     do (multiple-value-bind (his-downstream-guys his-terminator) (follow-this-component component :for-branch for-branch) 
+			  (setq downstream-guys (union downstream-guys his-downstream-guys))
+			  (when his-terminator (setq terminator his-terminator))
+			  ))))
+	     (values downstream-guys terminator))))
+      (loop for task in all-tasks
+	  when (typep task 'branch)
+	  do (follow-this-branch task))
+      blocks-ht)))
+
+;;; For each task downstream from the branch (but still in its basic block)
+;;; Look at each immediate predecessor and if it doesn't depend on the branch
+;;; Make it a predecessor of the Branch's Branching-task
+(defmethod find-indirectly-forced-predecessors ((task branch) branch-ht)
+  (let ((branching-task (superior task))
+	(answers nil))
+    (loop for downstream-task in (first (gethash task branch-ht))
+	do (loop for downstream-predecessor in (upstream-tasks downstream-task)
+	       unless (or (eql downstream-predecessor branching-task)
+			  (member downstream-predecessor (all-downstream-tasks branching-task)))
+	       do (pushnew downstream-predecessor answers)))
     (loop for answer in answers
-	do (push branching-task (cached-downstream-tasks answer))
-	   (push answer (cached-upstream-tasks branching-task)))
+	do (pushnew branching-task (cached-downstream-tasks answer))
+	   (pushnew answer (cached-upstream-tasks branching-task)))
     answers)
     )
       

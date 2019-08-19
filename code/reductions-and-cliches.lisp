@@ -20,7 +20,7 @@
 ;;; The original input and output types are what the query had before it was canonicalized (definitions replacing terms as in image -> (array pixel))
 
 (defreduction view-as-sequence-generator (generator (?input-type 
-						     (temporal-sequence ?output-type)
+						     (sequence ?output-type)
 						     ?original-input-type 
 						     ?original-output-type 
 						     ?input-name 
@@ -108,25 +108,27 @@
 ;;;  First is to a transducer and an collector
 ;;;  Second is To reduce that transducr to a take and generate.
 ;;;  Caveat: make sure that we don't come back here for the 2nd refinement.
-(defreduction reduce-to-element (transducer ((stream (?input-container-type ?input-element-type))
-					     (stream (?output-container-type ?output-element-type))
+(defreduction reduce-to-element (transducer ((stream ?input-type)
+					     (stream ?output-type)
 					     ?original-input-type ?original-output-type
 					     ?input-name ?output-name))
   :reduce-to (generate-and-collect  ?original-input-type ?input-name
-				       ?original-output-type ?output-container-type ?output-element-type ?output-name
-				       )
-  :prerequisites ((is-of-type? ?input-container-type 'container)
-		  (is-of-type? ?output-container-type 'container)
+				    ?original-output-type ?output-name
+				    ?input-type ?output-type
+				    )
+  ;; :bindings ((?input-container-type (first ?input-type)))
+  :prerequisites ((is-of-type? (first ?input-type) 'container)
+		  (is-of-type? (first ?output-type) 'container)
 		  ;; we'll get viewpoints other ways
-		  (not (is-a-viewpoint-operator? ?input-container-type)))
+		  (not (is-a-viewpoint-operator? (first ?input-type))))
   )
 
 
-(defreduction take-and-generate (branching-transducer ((stream (?input-container-type ?input-element-type))
+(defreduction take-and-generate (branching-transducer ((stream ?input-type)
 						       (temporal-sequence ?output-element-type)
 						       ?original-input-type ?original-output-type
 						       ?input-name ?output-name))
-  :reduce-to (take-and-generate-elements 'stream ?original-input-type ?input-container-type ?input-element-type ?input-name
+  :reduce-to (take-and-enumerate-elements 'stream ?original-input-type ?input-type ?input-name
 					 ?output-element-type ?output-name
 					 )
   :prerequisites (;; we'll get viewpoints other ways
@@ -200,8 +202,10 @@
 ;;; Output-container-type: internal container-type of the output
 ;;; Output-element-type: internal element-type of the output
 ;;; E.g. (stream image), foo, (stream disk-buffer), vector, byte
-(defcliche generate-and-collect (?original-input-type ?input-name
-				     ?original-output-type ?output-container-type ?output-element-type ?output-name)
+(defcliche generate-and-collect (?original-input-type ?input-name ?original-output-type ?output-name  
+						      ?input-type ?output-type)
+  :bindings ((?output-container-type (first ?output-type))
+	     (?output-element-type (second ?output-type)))
   :initial-inputs (;; this is the container of input stuff
 		   (:name ?input-name :type ?original-input-type)
 		   ;; this is the output queue
@@ -210,7 +214,7 @@
   :final-outputs ((:name chunks :port ?output-name :type ?original-output-type))
   :components ((:name tr :type branching-transducer :input-type ?original-input-type :output-type (temporal-sequence ?output-element-type))
 	       (:name acc-1 :type collector :input-type ?output-element-type :input-container-type temporal-sequence :output-type ?original-output-type))
-  :dataflows (((:component ?input-name :port ?input-name ) (:component tr :port raw-data))
+  :dataflows (((:component ?input-name :port ?input-name ) (:component tr :port input-queue))
 	      ((:component tr :branch more :port new-data) (:component acc-1 :branch more :port new-data))
 	      ((:component ?output-name :port ?output-name) (:component acc-1 :branch more :port queue))
 	      ((:component ?output-name :port ?output-name) (:component acc-1 :branch empty :port queue))
@@ -226,19 +230,25 @@
 ;;; Output-element-type: Type of whatever comes out
 ;;; E.g. stream, (stream image), array, pixel, foo pixel, bar
 ;;; original-input-type is subtype of (sequence-type (input-container-type input-element-type))
-(defcliche take-and-generate-elements (?sequence-type ?original-input-type
-					 ?input-container-type ?input-element-type ?input-name
+(defcliche take-and-enumerate-elements (?sequence-type ?original-input-type
+					 ?input-type ?input-name
 					 ?output-element-type ?output-name
 					 )
+  ;; :bindings ((?input-container-type (first ?input-type)) (?input-element-type (second ?input-type)))
   :initial-inputs ((:name ?input-name :type ?original-input-type))
-  :components ((:name t-1 :type take :element-type (?input-container-type ?input-element-type) :input-container-type ?sequence-type)
-	       (:name gen :type generator :input-type (?input-container-type ?input-element-type) :output-type (temporal-sequence ?output-element-type)))
+  :components ((:name t-1 :type take :element-type ?input-type :input-container-type ?sequence-type)
+	       (:name sequence-done-test :type queue-empty-test)
+	       (:name gen :type enumerator :set-type ?input-type 
+		      :output-type ?output-element-type))
   :exit-points ((:name more :ports ((:name ?output-name :type (temporal-sequence ?output-element-type))))
 		(:name empty))
-  :dataflows (((:component ?input-name :port ?input-name) (:component t-1 :port sequence-data))
-	      ((:component t-1 :port data) (:component gen :port container))
-	      ((:component gen :branch more :port new-data) (:component more :port ?output-name)))
-  :control-flows (((:component gen :branch empty) (:component empty)))
+  :dataflows (((:component ?input-name :port ?input-name) (:component sequence-done-test :port the-queue))
+	      ((:component ?input-name :port ?input-name) (:component t-1 :port sequence-data))			  
+	      ((:component t-1 :port data) (:component gen :port the-set))
+	      ((:component gen :branch more :port the-elements) (:component more :port ?output-name)))
+  :control-flows (((:component sequence-done-test :branch not-empty) (:component t-1))
+		  ((:component sequence-done-test :branch empty) (:component empty))
+		  )
   )
 
 
@@ -337,12 +347,12 @@
   :entry-points ((:name more :ports ((:name ?input-name :type (temporal-sequence ?input-type)) (:name ?output-name :type (stream ?output-type))))
 		 (:name empty :ports ((:name ?output-name :type (stream ?output-type)))))
   :components (;; The stuff left pathway
-	       (:name initial-buffer :type allocate :object-type ?output-type)
+	       (:name initial-buffer :type allocate :object-type ?output-type :size *disk-buffer-size*)
 	       (:name t-1 :type take :element-type ?input-type :input-container-type temporal-sequence)
 	       (:name vpush :type vector-push  :vector-type ?output-type :element-type ?input-type)
 	       (:name full? :type vector-full-test :vector-type (vector ?input-type))
 	       (:name p-1 :type put :element-type ?output-type :output-container-type stream)
-	       (:name new-buffer :type allocate :object-type ?output-type)
+	       (:name new-buffer :type allocate :object-type ?output-type :local t :size *disk-buffer-size*)
 	       ;; Now for the empty pathway
 	       (:name empty? :type vector-empty-test :vector-type (vector ?input-type))
 	       (:name p-2 :type put :element-type ?output-type :output-container-type stream)

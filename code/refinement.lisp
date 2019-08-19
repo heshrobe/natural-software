@@ -30,7 +30,7 @@
 ;;; This tells you how to create an object of the object type
 ;;; Note: For right now, I'm ignoring arguments that conditon
 ;;; allocation (e.g. what size vector you want)
-(define-predicate allocation-code (object-type code language) (ltms:ltms-predicate-model))
+;; (define-predicate allocation-code (object-type code language) (ltms:ltms-predicate-model))
 (define-predicate reason-for (implementation parent choice reason) (no-variables-in-data-mixin ltms:ltms-predicate-model))
 ;;;
 ;;; Contact points for cliche's that are intended to merge into another design
@@ -624,7 +624,8 @@
   )
 
 
-(defmacro defreduction (reduction-name (type arguments) &key the-instance reduce-to prerequisites previous-choices new-choices actions subplans the-plan)
+(defmacro defreduction (reduction-name (type arguments) &key the-instance reduce-to prerequisites previous-choices 
+							     new-choices actions subplans the-plan bindings)
   (flet ((make-anonymous-variable ()
 	   (make-logic-variable-maker "ANONYMOUS")))
     (unless the-instance (setq the-instance (make-anonymous-variable)))
@@ -637,6 +638,7 @@
        :then (predication-maker '(plan-for ,type ,the-instance ,arguments ,the-plan ,previous-choices ,new-choices))
        :if (predication-maker 
 	    '(and 
+	      ,@(process-bindings bindings)
 	      ,@prerequisites
 	      ,@processed-subplans
 	      ,@(when reduce-to `((unify ,the-plan ,(typecase reduce-to 

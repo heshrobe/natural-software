@@ -34,7 +34,8 @@
 
 (defdata-type boolean
     :super-types (primitives)
-    :other-assertions ([allocation-code list nil :lisp])
+    :allocation-code ((:lisp () 'nil))
+    ;; :other-assertions ([allocation-code list nil :lisp])
     )
 
 ;;; Things that are things like arrays, sets, sequences that contain other things
@@ -80,12 +81,14 @@
     :parameters (element-type)
     :equivalences (((setq ?x (adjoin ?y ?x)) (pushnew ?y ?x))
 		      ((setq ?x (cons ?y ?x)) (push ?y ?x)))
-    :other-assertions ([allocation-code list (list) :lisp])
+    :allocation-code ((:lisp () '(list)))
+    ;; :other-assertions ([allocation-code list (list) :lisp])
     )
 
 (defdata-type stream
     :super-types (temporal-sequence)
-    :other-assertions ([allocation-code stream (make-empty-queue) :lisp])
+    :allocation-code ((:lisp () '(make-empty-queue)))
+    ;; :other-assertions ([allocation-code stream (make-empty-queue) :lisp])
     )
 
 (defdata-type array
@@ -129,12 +132,14 @@
     )
 
 (defdata-type image
-    :definition (array pixel)
+    :definition (array pixel 2)
     )
 
 (defdata-type disk-buffer
+    :parameters (size)
     :definition (vector byte)
-    :other-assertions ([allocation-code disk-buffer (make-array *disk-buffer-size* :fill-pointer 0) :lisp])
+    :allocation-code ((:lisp (size) `(make-array ,size :fill-pointer 0)))
+    ;; :other-assertions ([allocation-code disk-buffer (make-array *disk-buffer-size* :fill-pointer 0) :lisp])
     )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -200,7 +205,8 @@
 
 (defdata-type json-path
     :definition (list json-key)
-    :other-assertions ([allocation-code json-path (list 'top) :lisp])
+    :allocation-code ((:lisp () '(list 'top)))
+    ;; :other-assertions ([allocation-code json-path (list 'top) :lisp])
     )
 
 (defdata-type JSON-non-terminal-node
@@ -284,6 +290,7 @@
     :super-types (io-device)
     )
 
+
 (deftask output-device
     :parameters (data-rate)
     :interface ((:inputs (data data-structure)))
@@ -314,8 +321,8 @@
 (deftask transducer
     :parameters (input-type output-type)
     :super-types (procedure)
-    :interface ((:Inputs (raw-data input-type))
-		(:outputs (new-data output-type)))
+    :interface ((:Inputs (input-queue input-type))
+		(:outputs (output-queue output-type)))
     )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -327,7 +334,7 @@
 (deftask branching-transducer
     :parameters (input-type output-type)
     :super-types (procedure) 
-    :interface ((:inputs (raw-data input-type))
+    :interface ((:inputs (input-queue input-type))
 		(:branches (:name more :condition (not (empty raw-data)) :outputs ((new-data output-type)))
 			   (:name empty :condition (empty raw-data))))
     )
@@ -481,7 +488,7 @@
 			       (t set-type)))
 	       (element-type (or element-type (second set-type)))
 	       (index-type (index-type set-type))
-	       (output-type (if for-value element-type `(place ,set-type ,index-type)))
+	       (output-type (or output-type (if for-value element-type `(place ,set-type ,index-type))))
 	       )
     :interface ((:inputs (the-set set-type))
 		(:branches (:name more :condition (not (empty the-set)) :outputs ((the-elements (temporal-sequence output-type))))
@@ -755,6 +762,14 @@
 			   (:name no :condition t)))
     )
 
+(deftask equal-test
+    :primitive t
+    :parameters ((value-1-data-type symbol) (value-2-data-type image))
+    :interface ((:inputs (value-1 value-1-data-type) (value-2 value-2-data-type))
+		(:branches (:name yes :condition (equal value-1 value-2))
+			   (:name no :condition :otherwise)))
+    )
+
 (deftask less-than-test
     :primitive t
     :parameters ((numeric-type integer))
@@ -821,6 +836,13 @@
     :interface ((:inputs (the-list (list element-type)))
 		(:branches (:name not-empty :condition (not (null the-list)))
 			   (:name empty :condition (null the-list)))))
+
+(deftask queue-empty-test
+    :primitive t
+    :parameters ()
+    :interface ((:inputs (the-queue stream))
+		(:branches (:name not-empty :condition (not (empty the-queue)))
+			   (:name empty :condition (empty the-queue)))))
 
 
 (deftask enumerate-filter-accumulate

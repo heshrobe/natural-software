@@ -627,13 +627,15 @@
     (set-port-symbolic-token output new-value)))
 
 ;;; Fix: This still seems like a bad hack
-;;; Should the modeling include an "Allocation" primitive
-(defun allocation-code (type language)
-  (when (listp type) (setq type (first type)))
-  (ask `[allocation-code ,type ?code ,language]
-       #'(lambda (just)
-	   (declare (ignore just))
-	   (return-from allocation-code (values ?code t)))))
+(defun allocation-code (allocator task-type language)
+  (Apply #'allocator-for allocator task-type language (properties allocator))
+  )
+
+
+;;;  (ask `[allocation-code ,type ?code ,language]
+;;;       #'(lambda (just)
+;;;	   (declare (ignore just))
+;;;	   (return-from allocation-code (values ?code t)))))
 
 (defmethod propagate ((task task-interface) (type (eql 'add-to-set)))
   (let* ((the-set-port (port-named 'input 'the-set task))
@@ -729,7 +731,7 @@
 (defmethod detemporalize-token ((token t)) (values token nil))
 (defmethod detemporalize-token ((token temporal-sequence-output-value)) (values (input-token token) nil))
 (defmethod detemporalize-token ((token enumerator-symbolic-value-mixin)) (values (enumeration-token token) nil))
-;;; this may be completely wrong
+;;; At the moment this type isn't actually used
 (defmethod detemporalize-token ((token stream-output-value)) (values (input-token token) nil))
 (defmethod detemporalize-token ((input-token join-symbolic-value))
   (values
@@ -738,10 +740,10 @@
 		collect (cons join (detemporalize-token token))))
    t))
 
-
-
 (defmethod propagate ((task task-interface) (type (eql 'take)))
   (let* ((input (first (inputs task)))
+	 (input-type (port-type-constraint input))
+	 (streaming? (and (listp input-type) (eql (first input-type) 'stream)))
 	 (input-token (symbolic-token input))
 	 (output (first (outputs task))))
     ;; If the token is of type temporal-sequence-output-value
@@ -750,13 +752,18 @@
     ;; just pass the token on.
     ;; if the token comes from an enumerator there's nothing to do
     ;; if from a sequence then we need to create a new variable
-    ;; (or a dequeue form)
-    (multiple-value-bind (new-token need-updating) (detemporalize-token input-token)
-      (when need-updating
+    ;; If it's from a stream input then we need to create a new value
+    (if streaming?
+      (let ((new-token (make-token normal-output :value (name output) :type (second input-type))))
 	(setf (producer new-token) task
-	      (port new-token) output))      
-      (set-port-symbolic-token output new-token)
-    )))
+	      (port new-token) output)
+	(set-port-symbolic-token output new-token))
+      (multiple-value-bind (new-token need-updating) (detemporalize-token input-token)
+	(when need-updating
+	  (setf (producer new-token) task
+		(port new-token) output))      
+	(set-port-symbolic-token output new-token)
+	))))
 
 (defmethod propagate ((task task-interface) (type (eql 'truncate)))
   (let* ((input (first (inputs task)))
@@ -1139,8 +1146,8 @@
   )
 
 (defmethod arm-task-control-flows ((task output-side-mixin))
-    (loop for control-flow in (outgoing-control-flows task)
+  (loop for control-flow in (outgoing-control-flows task)
       for token = (make-token simple-control-token
 		    :producer task)
-	do (arm-control-flow control-flow token task)))
+      do (arm-control-flow control-flow token task)))
 

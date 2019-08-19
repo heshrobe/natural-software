@@ -38,8 +38,12 @@
                   ;; so throw him away and wait for that 
                   ;; predecessor to get collected and requeue him
                   (t
-                   (ts-debug "~%Discarding ~a" new-guy)
-                   ))))
+                   (ts-debug "~%Discarding ~a missing ~a" 
+			     new-guy
+			     (loop for predecessor in (rest new-guy)
+				 unless (member predecessor result)
+					collect predecessor))
+                   ))))	     
              (collect-result (new-guy)
                (when (member new-guy result) (error "Trying to recollect ~a" new-guy))
                (ts-debug "~%Collecting ~a" new-guy)

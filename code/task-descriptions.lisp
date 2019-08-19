@@ -111,6 +111,11 @@
 	   [can-be-viewed-as ?base-type ?intermediate-type ?viewpoint]
 	   [is-of-type ?intermediate-type ?supertype]])
 
+(defrule or-type (:backward)
+  :then [is-of-type ?thing-1 (or ?type-1 ?type-2)]
+  :if [or [is-of-type ?thing-1 ?type-1][is-of-type ?thing-1 ?type-2]]
+)
+
 ;;; same with the base type qualified
 (defrule apply-viewpoint-equivalence-for-subtype-unpack (:backward :importance 1)
   :then [is-of-type (?viewpoint (?base-type . ?qualifiers)) ?super-type]
