@@ -509,7 +509,7 @@
 	(call-next-method))))
 
 (defmethod add-child ((parent has-joins-mixin) (the-join join-mixin))
-  (push the-join (joins parent))
+  (setf (joins parent) (append (joins parent) (list the-join)))
   (values the-join 
 	  ;;(controlled-tell `[join-of , parent ,the-join] :justification :premise)
 	  (tell `[join-of , parent ,the-join] :justification :premise))
@@ -986,6 +986,9 @@
 (defun process-deftask-bindings (pairs)
   pairs)
 
+(defun remove-all-parameters (type)
+  (untell `[has-property ,type ?]))
+
 (defun get-inherited-parameters (super-types)
   (let ((answer nil))
     (loop for type in super-types
@@ -1136,6 +1139,7 @@
       
       ;; And finally the code
       `(eval-when (:load-toplevel :execute :compile-toplevel)
+	 (remove-all-parameters ',type-name)
 	 (setf (gethash ',type-name *type-parameter-table*) '(,@local-parameters))
 	 (tell [is-type ,type-name])
 	 ,@(loop for (part-name part-data-type) in parts

@@ -175,6 +175,11 @@
     :super-types (data-structure)
     )
 
+(defdata-type tree
+    :parameters ((element-type tree-node))
+    :super-types (tree-node)
+    )
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Labeled Trees
@@ -218,7 +223,7 @@
     :definition (pair symbol json-node))
 
 (defdata-type JSON-alist-node
-    :definition (list jsonp-air)
+    :definition (list json-pair)
     )
 
 (defdata-type JSON-vector-node
@@ -228,6 +233,10 @@
 (defdata-type JSON-terminal-node
     :union (number symbol string)
     :super-types (JSON-node tree-terminal-node)
+    )
+
+(defdata-type JSON-tree
+    :definition (tree json-node)
     )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -479,6 +488,10 @@
     (declare (ignore element-type))
     (loop repeat number-of-dimensions collect 'integer)))
 
+(defmethod compound-index-type ((thing (eql 'list)) args)
+  (declare (ignore args))
+  'list)
+
 (deftask basic-enumerator
     :primitive t
     :super-types (procedure)
@@ -487,7 +500,7 @@
 			       ((and collection-type element-type) (list collection-type element-type))
 			       (t set-type)))
 	       (element-type (or element-type (second set-type)))
-	       (index-type (index-type set-type))
+	       (index-type (if (not for-value) (index-type set-type)))
 	       (output-type (or output-type (if for-value element-type `(place ,set-type ,index-type))))
 	       )
     :interface ((:inputs (the-set set-type))
@@ -570,7 +583,7 @@
     :primitive t
     :super-types (basic-enumerator)
     :parameters (element-type)
-    :interface ((:inputs (the-vector (vector element-type)))
+    :interface ((:inputs (the-set (vector element-type)))
 		(:branches (:name more :condition (not (null the-list)) :outputs ((the-elements (temporal-sequence element-type))
 										  (the-indices (temporal-sequence integers))))
 			   (:name empty :condition (null the-list)))))
@@ -801,11 +814,6 @@
 		(:outputs (the-output (temporal-sequence real-output-type))))
     )
 
-(deftask detect-duplicates
-    :primitive nil
-    :super-types (set-accumulator)
-    )
-
 (deftask filter
     :primitive t
     :parameters (input-type output-type condition)
@@ -1005,7 +1013,7 @@
 
 (deftask jdd 
     :primitive nil
-    :interface ((:inputs (the-node json-node))
+    :interface ((:inputs (the-tree json-tree))
 		(:outputs)))
 
 (deftask sorted-list-test
@@ -1152,17 +1160,32 @@
 ;;;
 ;;;  Accumulators
 ;;;
-;;; there are variations on this theme.  For example
+;;; There might be some variations on this theme.  For example
 ;;; does it take a manifested set (i.e. a data structure) as input
-;;; or a temporal sequence
+;;; or a temporal sequence.  
+;;;
 ;;; Does it do extraction of the elements of the set, etc.
 ;;; Given this I just have two at the moment:
+;;;
 ;;; 1) a simple numerical one that takes a temporal sequence of numbers (should extend with extractor)
 ;;; and reduces the number with some numerical op and initial value
 ;;; 2) A set accumulator that takes a data structure does extraction and produces a new set
 ;;; to do: make a basic accumulator and then sub-types that are set-accumulator and numerical-accumulator
+;;; But this seams wrong, let's stick with the pattern in (1) You accept a temporal sequence
+;;; You produce a manifested set.
+;;;
+;;; This means that anything interposed between an enumerator and an accumulator (e.g. a filter)
+;;; Needs to both input and output a temporal sequence
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(deftask accumulator
+    :super-types (procedure)    
+    :Parameters (input-type output-set-type output-type operator)
+    :interface ((:joins (:name more :inputs ((the-sequence (temporal-sequence input-type))))
+			(:name empty))
+		(:outputs (accumuland (output-set-type output-type)))
+		))
 
 (deftask numerical-accumulator
     :super-types (procedure)
@@ -1175,17 +1198,25 @@
 			(:name empty))
 		(:outputs (accumuland real-output-type))))
 
-;;; This guy takes a manifested set (i.e. not a temporal sequence)
-;;; and accumulates an output value
 (deftask set-accumulator
-    :super-types (procedure)
+    :super-types (accumulator)
     :primitive nil
-    :parameters (input-type output-type op initial-value)
+    :parameters (op initial-value)
     :bindings (;; (real-input-type (or (definition-for input-type) input-type))
 	       ;; (real-output-type (or (definition-for output-type) output-type))
-	       (initial-value (or initial-value (default-initial-value-for-acc op))))
-    :interface ((:inputs (the-sequence input-type))
-		(:outputs (accumuland output-type))))
+	       (op (or op (accumulation-op-for-set-type output-type)))
+	       (initial-value (or initial-value (default-initial-value-for-acc op)))))
+
+;;; This guy takes a manifested set (i.e. not a temporal sequence)
+;;; and accumulates an output value
+(deftask detect-duplicates
+    :primitive nil
+    :super-types (set-accumulator)
+    )
+
+(defmethod accumulation-op-for-set-type ((compound-set list)) (accumulation-op-for-set-type (first compound-set)))
+(defmethod accumulation-op-for-set-type ((type (eql 'list))) 'cons)
+(defmethod default-initial-value-for-acc ((op (eql 'cons))) nil)
 
 (deftask array-acc
     :super-types ()

@@ -245,7 +245,7 @@ k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Josh
 
 (defmethod top-level-arg-code-for (port (language (eql :java)))
   (let* ((token (symbolic-token port))
-	 (name (top-level-argument-for-language token language))
+	 (name (name port)) ;;(top-level-argument-for-language token language))
 	 (type (type-constraint token)))
   `(:top-level-arg ,name ,type)))
 
@@ -401,7 +401,7 @@ k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Josh
          ;; (input-values (mapcar #'value input-tokens))
          )
     (cond
-     ((and (eql language :lisp) (listp type) (eql (first type) 'temporal-sequence))
+     ((and (listp type) (eql (first type) 'temporal-sequence))
       *defer-token*)
      ((eql language :lisp)
       (setf (form output-token) (allocation-code task type language))
@@ -784,7 +784,7 @@ k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Josh
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;; Fix Where's the Java Method for this?
-(defmethod form-for ((task task-interface) (task-type (eql 'take)) (language t))
+(defmethod form-for ((task task-interface) (task-type (eql 'take)) (language (eql :lisp)))
   (let* ((input-port (port-named 'input 'sequence-data task))
          (input-token (symbolic-token input-port))
 	 (input-tokens-input-token (when (typep input-token 'temporal-sequence-output-value) (input-token input-token)))
@@ -809,6 +809,37 @@ k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Josh
        `(loop for ,(if (is-viewpoint? output-variable) (form output-token) output-variable) = (dequeue ,input-variable)
             do ,@(sub-gobble (code language task) code)))
       (t *defer-token*))))
+
+(defmethod form-for ((task task-interface) (task-type (eql 'take)) (language (eql :java)))
+  (let* ((input-port (port-named 'input 'sequence-data task))
+         (input-token (symbolic-token input-port))
+	 (input-tokens-input-token (when (typep input-token 'temporal-sequence-output-value) (input-token input-token)))
+         (input-variable (value input-token))
+         (sequence-type (first (type-constraint input-token)))
+         (output-port (first (outputs task)))
+         (output-token (symbolic-token output-port))
+         (output-variable (value output-token)))
+    ;; I don't remember why this setf is there, but in the case
+    ;; that our output token is the result of a put-take flow sequence
+    ;; out output token is that the result token of whatever operation
+    ;; was put into the sequence and which case we shouldn't be mucking
+    ;; with it's form which the actual operation has already produced.
+    (unless (eql output-token input-tokens-input-token)
+      (setf (form output-token) (value output-token)))
+    (case sequence-type
+      (stream
+       ;; Fix: needs to be language independent
+       ;; the variable might have been converted to viewpoint of something
+       ;; to we need this check
+       ;; Check: Can this issue occur elsewhere?
+       `(:for (:variable ,output-variable)
+	   :init (:application remove ,input-variable)
+	   :refresh (:application remove ,input-variable)
+	   :terminate (:binary-comparison = (:application peek ,input-variable) NULL)
+	   :body ,@(sub-gobble (code language task) code)
+	   ))
+      (t *defer-token*))))
+
 
 (defmethod form-for ((task task-interface) (task-type (eql 'truncate)) (language (eql :lisp)))
   (let* ((input-port (port-named 'input 'data task))
@@ -1012,6 +1043,20 @@ k;;; -*- Mode: LISP; Syntax: ANSI-Common-Lisp; Package: natsoft; readtable: Josh
        do ,@more-branch-code
 	  ,@(when empty-branch-code 
 	      `(finally ,@empty-branch-code))))
+
+(defmethod build-list-enumerator-code ((language (eql :java)) element the-list more-branch-code empty-branch-code)
+  (let ((how-to-handle-finally :effect))
+    `(:for (:variable ,element)
+	   :init (:application next ,the-list)
+	   :refresh (:application next ,the-list)
+	   :terminate (:application has-next )
+	   :body ,@more-branch-code
+	   :exit-code ,(case how-to-handle-finally
+			 (:empty ())
+			 ;; Fix: this is probably wrong
+			 (:return `(:return ,@empty-branch-code))
+			 (:effect empty-branch-code))
+	   )))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

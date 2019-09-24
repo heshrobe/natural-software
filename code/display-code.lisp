@@ -514,8 +514,10 @@
     (flet ((draw-control-flow (y-pos)
 	     (cond
 	      ((and branch-source? (null (outgoing-control-flows task)))
-	       (clim:draw-arrow* stream x-pos y-pos (+ x-pos width -10) y-pos :line-dashes t)
-	       (clim:draw-circle* stream (+ x-pos width -5) y-pos 5))
+	       ;; the arrow is a distraction unless we can make a drag-and-drop work
+	       ;;(clim:draw-arrow* stream x-pos y-pos (+ x-pos width -10) y-pos :line-dashes t)
+	       ;;(clim:draw-circle* stream (+ x-pos width -5) y-pos 5)
+	       )
 	      (t
 	       (clim:draw-line* stream x-pos y-pos (+ x-pos width) y-pos :line-dashes t)))
 	     (push (list *control-port* (+ width x-pos) y-pos) *output-port-map*)

@@ -634,12 +634,13 @@
 (defun process-enum-values (input-type enumerator-type output-type &optional (for-value t) (finally :for-effect))
   (let* ((enum-is-listp (listp enumerator-type))
 	 (old-enum-properties (when enum-is-listp 
-			  (strip-out-properties enumerator-type '(:set-type :for-value :finally-options))))
+				(strip-out-properties enumerator-type '(:set-type :for-value :finally-options))))
 	 (enum-set-type (or (and enum-is-listp (getf (rest enumerator-type) :set-type))  input-type))
-	 (enum-element-type (second enum-set-type))
+	 (enum-element-type (or (and enum-is-listp (getf (rest enumerator-type) :element-type)) 
+				(and (listp enum-set-type) (second enum-set-type))))
 	 (enum-name (if enum-is-listp (first enumerator-type) enumerator-type))
 	 (full-enum-type (list* enum-name :set-type enum-set-type :for-value for-value :finally-option finally old-enum-properties))
-	 (enum-output-type (or output-type (second input-type))))
+	 (enum-output-type (or enum-element-type output-type)))
     (values full-enum-type enum-output-type enum-element-type)))
 
 ;;; Fix: Shouldn't numeric type be element-type to be more general?
@@ -647,7 +648,9 @@
   (let* ((accum-is-listp (listp accumulator-type))
 	 (old-accum-properties (when accum-is-listp (strip-out-properties accumulator-type '(:numeric-type))))
 	 (real-accum-name (if accum-is-listp (first accumulator-type) accumulator-type))
-	 (enum-numeric-type (or (and accum-is-listp (getf (rest accumulator-type) :numeric-type)) (second input-type)))
+	 (enum-numeric-type (or (and accum-is-listp (getf (rest accumulator-type) :numeric-type)) 
+				(and (listp input-type) (second input-type))
+				input-type))
 	 (real-accum-type (list* real-accum-name :numeric-type enum-numeric-type old-accum-properties)))
     (values real-accum-type )))
 
@@ -707,11 +710,11 @@
               ((:component ALLOC :port NEW-OBJECT) (:component RESTREAM :port SEQUENCE))
               ((:component DO-ONE :port DATA) (:component FILTER :port TEST-DATA))
               ((:component DO-ONE :port DATA) (:component RESTREAM :port DATA))
-              ((:component RESTREAM :port SEQUENCE-DATA) (:component ACCUM :port THE-SEQUENCE :branch MORE))
+              ((:component RESTREAM :port SEQUENCE-DATA) (:component ACCUM :port THE-SEQUENCE ))
               ((:component ACCUM :port ACCUMULAND) (:component the-accumuland :port THE-accumuland))
               )
   :control-flows (
-                  ((:component ENUM :branch EMPTY) (:component ACCUM :branch EMPTY))
+                  ;;((:component ENUM :branch EMPTY) (:component ACCUM :branch EMPTY))
                   ((:component FILTER :branch MATCH) (:component RESTREAM))
                   )
   )
@@ -777,17 +780,17 @@
   :reduce-to (jdd-plan))
 					    
 (defcliche jdd-plan ()
-  :initial-inputs ((:name the-node :type json-node))
+  :initial-inputs ((:name the-tree :type json-tree))
   :final-outputs ()
   :components ((:name generate-dups 
 		      :type enumerate-filter-accumulate
-		      :input-type json-node :output-type (list symbol)
-		      :enumerator-type (tree-traverse :set-type json-node :element-type json-node :key-type json-key)
+		      :input-type json-tree :output-type (list symbol)
+		      :enumerator-type (tree-traverse :set-type json-tree :element-type json-node :key-type json-key)
 		      :filter-type (type-split :input-type json-node :output-type json-alist-node)
 		      :accumulator-type (detect-duplicates :input-type json-alist-node :output-type (list symbol) :key-extractor-type left))
 	       (:name null-test :type empty-test :element-type symbol)
 	       (:name print-dups :type print :input-type (list symbol)))
-  :dataflows (((:component the-node :port the-node) (:component generate-dups :port the-set))
+  :dataflows (((:component the-tree :port the-tree) (:component generate-dups :port the-set))
 	      ((:component generate-dups :port the-accumuland) (:component null-test :port the-list))
 	      ((:component generate-dups :port the-accumuland) (:component print-dups :port the-data)))
   :control-flows (((:component null-test :branch not-empty) (:component print-dups))))

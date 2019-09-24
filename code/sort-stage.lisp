@@ -74,7 +74,6 @@
 				      (find-global-initial-tasks top-level-task))))
 	 (all-tasks nil))
     (setq all-tasks (compute-all-upstream-and-downstream-tasks top-level-task))
-    ;;(format *trace-output* "~%All tasks ~a ~%Length ~a" all-tasks (length all-tasks))
     (loop for task in all-tasks
         unless (eql task top-level-task)
         do (pushnew top-level-task  (all-upstream-tasks task)))
@@ -83,6 +82,7 @@
 	  when (typep task 'branch)
 	  do (find-indirectly-forced-predecessors task branch-ht)))
     (let ((sorted-guys (topological-sort initial-tasks #'upstream-tasks #'downstream-tasks)))
+      ;; (format *trace-output* "~%All tasks ~a ~%Length ~a" sorted-guys (length sorted-guys))
       sorted-guys)))
 
 (defun compute-all-upstream-and-downstream-tasks (top-level-task)
@@ -213,6 +213,8 @@
     (loop for downstream-task in (first (gethash task branch-ht))
 	do (loop for downstream-predecessor in (upstream-tasks downstream-task)
 	       unless (or (eql downstream-predecessor branching-task)
+			  (and (typep downstream-predecessor 'state-source)
+			       (not (eql (getf (properties downstream-predecessor) :locality) :local)))
 			  (member downstream-predecessor (all-downstream-tasks branching-task)))
 	       do (pushnew downstream-predecessor answers)))
     (loop for answer in answers

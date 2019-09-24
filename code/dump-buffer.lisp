@@ -47,14 +47,15 @@
 	(*show-input-type-constraints* nil)
 	(*graph-generation-separation* 0)
 	(*control-port-length* 20))
-    (map-over-selected-implementation task
-				      #'(lambda (sub-task history implementation)
-					  ;; (declare (ignore sub-task history))
-					  (with-open-file (file (format nil "~a-~d.ps" pathname (incf counter))
-							   :if-exists :supersede :if-does-not-exist :create :direction :output)
-					    (clim:with-output-to-postscript-stream (stream file)
-					      (display-task implementation stream)
-					      (format stream "~%~a <-- ~{~a~^ <--~} ~%" sub-task history)))))))
+    (map-over-selected-implementation 
+     task
+     #'(lambda (sub-task history implementation)
+	 ;; (declare (ignore sub-task history))
+	 (with-open-file (file (format nil "~a-~d.ps" pathname (incf counter))
+			  :if-exists :supersede :if-does-not-exist :create :direction :output)
+	   (clim:with-output-to-postscript-stream (stream file)
+	     (display-task implementation stream)
+	     (format stream "~%~a <-- ~{~a~^ <--~} ~%" sub-task history)))))))
 
 (define-design-editor-command (com-print-design-hierarchy :name t)
     ((task 'basic-task)

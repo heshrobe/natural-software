@@ -1538,8 +1538,13 @@ Something that;;; This is used when you want to take the initiative and query th
   (produce-implementations task nil language))
 
 (define-design-editor-command (com-implement-design :name t)
-    ((language '(clim:member-alist (("Lisp" . :lisp) ("Java" . :Java))) :default :lisp))
+    ((language '(clim:member-alist (("Lisp" . :lisp) ("Java" . :Java))) :default :lisp)
+     &key 
+     (kill-abstract-task 'boolean :default t))
   (let* ((design (design-in-progress clim:*application-frame*)))
+    (loop for task in (children design) do (clean-out-component task))
+    (when (and kill-abstract-task (not (null (abstract-task design))))
+      (setf (abstract-task design) nil))
     (when (or (not (typep design 'implementation))
               (null (abstract-task design)))
       (create-abstract-task-for-diagram design)
@@ -1548,6 +1553,45 @@ Something that;;; This is used when you want to take the initiative and query th
       (produce-implementations task-interface :keep-top-level language))
     (switch-focus clim:*application-frame* design)
     ))
+
+(defun clean-out-component (component)
+  (labels ((clean-out-input-ports (component)
+	     (setf (N-inputs-provided component) 0)
+	     (loop for input in (Inputs component)
+		 do (setf (symbolic-token input) nil
+			  (corresponding-port input) nil)))
+	   (clean-out-output-ports (component)
+	     (setf (n-outputs-provided component) 0)
+	     (loop for output in (outputs component)
+		 do (setf (symbolic-token output) nil
+			  (corresponding-port output) nil)))
+	   (clean-out-upstream-and-downstream (component)
+	     (setf (all-upstream-tasks component) nil
+		   (all-downstream-tasks component) nil
+		   (cached-upstream-tasks component) nil
+		   (cached-downstream-tasks component) nil)))
+    (clean-out-upstream-and-downstream component)	   
+    (typecase component
+      (input-side-mixin
+       (clean-out-input-ports component))
+      (output-side-mixin
+       (clean-out-output-ports component)))
+    (when (typep component 'has-successors-mixin)
+      (setf (completion-task component) nil))
+    (typecase component
+      (has-branches-mixin 
+       (loop for branch in (branches component)
+	   do (clean-out-upstream-and-downstream branch)
+	      (clean-out-output-ports branch)
+	      (setf (corresponding-exit-point branch) nil)))
+      (has-joins-mixin
+       (loop for join in (joins component)
+	   do (clean-out-upstream-and-downstream join)
+	      (clean-out-input-ports join)
+	      (setf (corresponding-entry-point join) nil)))
+      ((or initial-input final-output)
+       (setf (corresponding-port component) nil))
+      )))
 
 ;;; Use-existing can be any of the following
 ;;; Nil: Start from the top level task and refine everything

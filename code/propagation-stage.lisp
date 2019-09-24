@@ -840,18 +840,18 @@
          (input-value-token (symbolic-token input))
          (lower-bound (lower-bound input-value-token))
          (upper-bound (upper-bound input-value-token))
-         ;; (multiple-consumers (rest (consumers input-value-token)))
-         ;; (input-value (if multiple-consumers (value input-value-token) (form input-value-token)))
+	 ;; (multiple-consumers (rest (consumers input-value-token)))
+	 ;; (input-value (if multiple-consumers (value input-value-token) (form input-value-token)))
          (more-branch (branch-named 'more task))
          (empty-branch (branch-named 'empty task))
-         ;; maybe this should fetch the branch by name?
+	 ;; maybe this should fetch the branch by name?
          (output (first (outputs more-branch)))
          (new-index (next-instance-of-variable 'index))
 	 (enumeration-token (make-token normal-output
-			:Producer more-branch
-			:port output
-			:type 'integer
-			:value new-index))
+			      :Producer more-branch
+			      :port output
+			      :type 'integer
+			      :value new-index))
          (output-value (make-token index-enumerator-symbolic-value
                          :producer more-branch
                          :port output
@@ -878,13 +878,20 @@
          ;; maybe this should fetch the branch by name?
          (output (first (outputs more-branch)))
          (new-element (next-instance-of-variable 'list-element))
+	 (real-type-constraint (if (listp input-type-constraint) (second input-type-constraint) input-type-constraint))
+	 (enumeration-token (make-token normal-output
+					:Producer more-branch
+					:port output
+					:type real-type-constraint
+					:value new-element))
          (output-value (make-token list-enumerator-symbolic-value
                          :producer more-branch 
                          :port output
                          :value new-element
                          ;; this should be a sequence of 
                          ;; the type of the list-elements
-                         :type `(temporal-sequence ,(if (listp input-type-constraint) (second input-type-constraint) input-type-constraint))
+                         :type `(temporal-sequence , real-type-constraint)
+			 :enumeration-token enumeration-token
                          )))
     ;; see comment in the previous message
     (set-port-symbolic-token output output-value)
