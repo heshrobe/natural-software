@@ -80,9 +80,9 @@
    ("dump-buffer" (:module-class separate-destination-joshua-module))
    ("dump-drawing" (:module-class separate-destination-joshua-module))
    ("ui-support" (:module-class separate-destination-joshua-module))
-   ("physics-ontology" (:module-class separate-destination-joshua-module))
-   ("image-processing-ontology" (:module-class separate-destination-joshua-module))
-   ("read-analysis-file" (:module-class separate-destination-joshua-module))
+   ;; ("physics-ontology" (:module-class separate-destination-joshua-module))
+   ;; ("image-processing-ontology" (:module-class separate-destination-joshua-module))
+   ;; ("read-analysis-file" (:module-class separate-destination-joshua-module))
    ))
 
 (defsystem natsoft
