@@ -1076,13 +1076,14 @@
     related-to-texp
     )))
 
-(defmethod intern-verb ((generator question-generator) (verb-string string) &key negative tense progressive modality voice)
+(defmethod intern-verb ((generator question-generator) (verb-string string) &key negative tense progressive modality voice perfective)
   (let ((the-verb (intern-new-instance generator verb-string)))
     (when negative (make-verb-negative generator the-verb))
     (when tense (add-verb-modifier generator the-verb '|has_tense| tense))
     (when progressive (add-verb-modifier generator the-verb '|is_progressive| '|yes|))
     (when modality (add-verb-modifier generator the-verb '|has_modal| modality))
     (when voice (add-verb-modifier generator the-verb '|has_voice| voice))
+    (when perfective (add-verb-modifier generator the-verb '|is_perfective| '|yes|))
     the-verb))
 
 (defmethod add-verb-modifier ((generator question-generator) (the-verb instance) (modification-type symbol) (modification-value symbol))
