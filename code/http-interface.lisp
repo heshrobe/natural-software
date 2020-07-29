@@ -17,6 +17,7 @@
 		 ("uuid" . "iap-project")
 		 ("te" . ,encoding)
 		 ("kb" . "no")
+                 ("dg" . "no")
 		 ("query" . ,text)))
     (declare (ignore headers uri))
     (values response code)
